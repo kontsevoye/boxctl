@@ -1,0 +1,14 @@
+config boxctl 'main'
+	# Comma-separated DNS aliases accepted during first-run administrator setup.
+	option allowed_hosts ''
+
+	# Externally visible origin when TLS terminates at a reverse proxy, for
+	# example https://router.example. The proxy must preserve the Host header.
+	option public_origin ''
+
+	# Zashboard runs as administrator-equivalent same-origin JavaScript.
+	option enable_unsafe_external_dashboard '0'
+
+	# Set both absolute paths to serve HTTPS directly from boxctl.
+	option tls_certificate ''
+	option tls_key ''

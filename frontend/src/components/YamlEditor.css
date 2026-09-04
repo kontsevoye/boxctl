@@ -1,0 +1,28 @@
+.yaml-editor {
+  height: 60vh;
+  min-height: 28rem;
+  max-height: 80vh;
+  resize: vertical;
+  overflow: hidden;
+  background: var(--panel-raised);
+}
+
+.yaml-editor .cm-editor {
+  height: 100%;
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.yaml-editor .cm-scroller {
+  overflow: auto;
+  tab-size: 2;
+}
+
+.yaml-editor .cm-content,
+.yaml-editor .cm-gutterElement {
+  padding-block: .3rem;
+}
+
+.yaml-editor .cm-focused {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
