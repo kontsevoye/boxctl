@@ -17,8 +17,10 @@ POSIX_SHELL_SCRIPTS := \
 	packaging/openwrt/files/etc/hotplug.d/net/99-boxctl-tun \
 	scripts/calver.sh \
 	scripts/deploy-openwrt.sh \
+	scripts/release-notes.sh \
 	scripts/test-calver.sh \
 	scripts/test-deploy-openwrt.sh \
+	scripts/test-release-notes.sh \
 	scripts/validate-calver.sh \
 	tests/integration/guest/run.sh \
 	tests/integration/guest/traffic.sh
@@ -60,6 +62,7 @@ test-scripts:
 	bash -n $(BASH_SHELL_SCRIPTS)
 	sh scripts/test-calver.sh
 	sh scripts/test-deploy-openwrt.sh
+	sh scripts/test-release-notes.sh
 
 frontend:
 	npm --prefix frontend run build

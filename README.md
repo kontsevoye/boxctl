@@ -219,11 +219,14 @@ may instead be provided with `--sha256`. Local files without either checksum
 are rejected. `boxctl self-update rollback` restores the one retained previous
 binary.
 
-Releases are deliberate and tag-backed. Run the `release-tag` workflow on
-`main`; it finds the highest `vYYYY.MM.N` tag for the current UTC month and
-increments its monthly release number (`v2025.01.15` becomes `v2025.01.16`).
-It then reruns all checks, builds the artifacts, and creates the `v<CalVer>` tag
-together with its GitHub Release containing:
+Every push to `master` runs the checks, builds the release artifacts once, and
+then creates a tag-backed GitHub Release. The workflow finds the highest
+`vYYYY.MM.N` tag for the current UTC month and increments its monthly release
+number (`v2025.01.15` becomes `v2025.01.16`). The release title is the tag
+itself, and its notes list every commit since the previous CalVer release with
+links to the commits and the full comparison. A rerun for an already tagged
+commit performs the checks without rebuilding or republishing release assets.
+Each new release contains:
 
 - the raw static Linux/AArch64 binary and SHA-256 file;
 - a portable OpenWrt bundle and SHA-256 file;

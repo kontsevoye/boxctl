@@ -31,8 +31,10 @@ func TestShellScriptsParse(t *testing.T) {
 	t.Parallel()
 	for _, relative := range []string{
 		"scripts/calver.sh",
+		"scripts/release-notes.sh",
 		"scripts/validate-calver.sh",
 		"scripts/test-calver.sh",
+		"scripts/test-release-notes.sh",
 		"packaging/openwrt/install.sh",
 		"packaging/openwrt/files/etc/init.d/boxctl",
 		"packaging/openwrt/files/etc/hotplug.d/iface/40-boxctl",
@@ -67,24 +69,35 @@ func TestInitScriptReexecsManagerWithoutStoppingCore(t *testing.T) {
 
 func TestCalVerReleaseWorkflowPublishesVerifiedArtifacts(t *testing.T) {
 	t.Parallel()
-	tagWorkflow := readProjectFile(t, ".github/workflows/release-tag.yml")
+	workflow := readProjectFile(t, ".github/workflows/ci.yml")
 	for _, required := range []string{
-		"workflow_dispatch:",
+		"branches: [master]",
 		"./scripts/calver.sh",
 		"./scripts/validate-calver.sh",
-		`printf 'tag=v%s\n' "$calver"`,
+		"should_release=true",
 		"go test -race ./...",
+		"actions/download-artifact@",
+		`./scripts/release-notes.sh "$TAG" "$GITHUB_SHA"`,
 		`gh release create "$TAG"`,
 		`--target "$GITHUB_SHA"`,
+		`--title "$TAG"`,
+		`--notes-file release-notes.md`,
+		`--fail-on-no-commits`,
 		`dist/boxctl-linux-arm64-$VERSION.sha256`,
 		`dist/boxctl-openwrt-linux-arm64-$VERSION.tar.gz`,
 		`dist/boxctl-openwrt-linux-arm64-$VERSION.tar.gz.sha256`,
 		`dist/boxctl-openwrt-25.12-mediatek-filogic-$VERSION.apk.sha256`,
-		"            LICENSE \\",
+		"            release-files/LICENSE \\",
 	} {
-		if !strings.Contains(tagWorkflow, required) {
-			t.Errorf("release tag workflow is missing %q", required)
+		if !strings.Contains(workflow, required) {
+			t.Errorf("CI release workflow is missing %q", required)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(projectRoot(t), ".github/workflows/release-tag.yml")); !os.IsNotExist(err) {
+		t.Error("standalone release workflow still exists and can rebuild the same commit")
+	}
+	if count := strings.Count(workflow, "make bundle-openwrt-arm64 \\"); count != 1 {
+		t.Errorf("CI workflow builds the portable bundle %d times; want exactly once", count)
 	}
 }
 
