@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -13,9 +14,11 @@ import (
 
 const defaultDNSProbeTimeout = time.Second
 
-// ProbeDNS verifies that the local listener is a DNS server, rather than only
-// checking that a UDP socket can be connected. The root A question avoids
-// sending a real hostname upstream; any complete DNS response code is accepted.
+// ProbeDNS verifies that the local listener can complete a fresh recursive DNS
+// request, rather than only checking that a UDP socket can be connected. A
+// random name below the reserved .invalid TLD avoids both cache-only success
+// and queries for real hostnames. NOERROR and NXDOMAIN prove a usable response;
+// resolver failure codes do not.
 func ProbeDNS(ctx context.Context, endpoint DNSEndpoint) error {
 	return probeDNSWithTimeout(ctx, endpoint, defaultDNSProbeTimeout)
 }
@@ -53,7 +56,7 @@ func probeDNSWithTimeout(ctx context.Context, endpoint DNSEndpoint, timeout time
 		}
 	}
 
-	query, queryID, err := rootDNSQuery()
+	query, queryID, queryName, err := dnsProbeQuery()
 	if err != nil {
 		return err
 	}
@@ -65,29 +68,40 @@ func probeDNSWithTimeout(ctx context.Context, endpoint DNSEndpoint, timeout time
 	if err != nil {
 		return fmt.Errorf("read DNS probe response: %w", err)
 	}
-	if err := validateDNSResponse(response[:read], queryID); err != nil {
+	if err := validateDNSResponse(response[:read], queryID, queryName); err != nil {
 		return fmt.Errorf("invalid DNS probe response: %w", err)
 	}
 	return nil
 }
 
-func rootDNSQuery() ([]byte, uint16, error) {
+func dnsProbeQuery() ([]byte, uint16, string, error) {
+	const randomLabelBytes = 8
+	const probeLabelLength = byte(len("boxctl-") + 2*randomLabelBytes)
+
 	var idBytes [2]byte
 	if _, err := rand.Read(idBytes[:]); err != nil {
-		return nil, 0, fmt.Errorf("generate DNS probe ID: %w", err)
+		return nil, 0, "", fmt.Errorf("generate DNS probe ID: %w", err)
+	}
+	var labelBytes [randomLabelBytes]byte
+	if _, err := rand.Read(labelBytes[:]); err != nil {
+		return nil, 0, "", fmt.Errorf("generate DNS probe name: %w", err)
 	}
 	id := binary.BigEndian.Uint16(idBytes[:])
-	query := make([]byte, 17)
+	label := "boxctl-" + hex.EncodeToString(labelBytes[:])
+	queryName := label + ".invalid."
+	query := make([]byte, 12, 12+1+len(label)+1+len("invalid")+1+4)
 	binary.BigEndian.PutUint16(query[0:2], id)
 	binary.BigEndian.PutUint16(query[2:4], 0x0100) // recursion desired
 	binary.BigEndian.PutUint16(query[4:6], 1)      // one question
-	query[12] = 0                                  // root name
-	binary.BigEndian.PutUint16(query[13:15], 1)    // A
-	binary.BigEndian.PutUint16(query[15:17], 1)    // IN
-	return query, id, nil
+	query = append(query, probeLabelLength)
+	query = append(query, label...)
+	query = append(query, byte(len("invalid")))
+	query = append(query, "invalid"...)
+	query = append(query, 0, 0, 1, 0, 1) // root terminator, A, IN
+	return query, id, queryName, nil
 }
 
-func validateDNSResponse(message []byte, queryID uint16) error {
+func validateDNSResponse(message []byte, queryID uint16, queryName string) error {
 	if len(message) < 12 {
 		return errors.New("header is truncated")
 	}
@@ -104,6 +118,10 @@ func validateDNSResponse(message []byte, queryID uint16) error {
 	if flags&0x0200 != 0 {
 		return errors.New("response is truncated")
 	}
+	responseCode := flags & 0x000f
+	if responseCode != 0 && responseCode != 3 {
+		return fmt.Errorf("DNS server returned failure response code %d", responseCode)
+	}
 	if binary.BigEndian.Uint16(message[4:6]) != 1 {
 		return errors.New("response does not contain the matching question")
 	}
@@ -112,7 +130,7 @@ func validateDNSResponse(message []byte, queryID uint16) error {
 	if err != nil {
 		return fmt.Errorf("parse question name: %w", err)
 	}
-	if name != "." {
+	if name != queryName {
 		return errors.New("response question name does not match")
 	}
 	if offset+4 > len(message) {

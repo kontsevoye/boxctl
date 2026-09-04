@@ -69,6 +69,21 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   return payload.data
 }
 
+export function endpointUnavailable(reason: unknown, allowNotFound = true): reason is APIError {
+  return reason instanceof APIError && (reason.status === 501 || (allowNotFound && reason.status === 404))
+}
+
+export async function requestWithFallback<T>(primaryPath: string, fallbackPath: string | undefined, init: RequestInit = {}): Promise<T> {
+  try {
+    return await request<T>(primaryPath, init)
+  } catch (reason) {
+    const method = (init.method ?? 'GET').toUpperCase()
+    const safeRead = method === 'GET' || method === 'HEAD'
+    if (!fallbackPath || !endpointUnavailable(reason, safeRead)) throw reason
+    return request<T>(fallbackPath, init)
+  }
+}
+
 function errorFromEnvelope(status: number, payload: ErrorEnvelope): APIError {
   return new APIError(
     status,

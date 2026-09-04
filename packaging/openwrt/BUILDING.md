@@ -16,7 +16,10 @@ manager, so this package intentionally is not labelled `aarch64_generic`.
 The package installs the manager at `/opt/boxctl/bin/boxctl`, its `procd`
 service, both hotplug handlers, and the APK/sysupgrade persistence lists. Its
 runtime dependencies describe the OpenWrt commands and kernel support used by
-the manager.
+the manager. Empty `/opt/boxctl/engines/mihomo` and
+`/opt/boxctl/engines/sing-box` directories are created for separately managed
+core artifacts; no third-party proxy-core binary or license is embedded in the
+boxctl package.
 
 To reproduce a package build on Linux x86-64, first build the static arm64
 binary and then invoke the SDK wrapper:

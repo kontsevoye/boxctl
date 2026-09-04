@@ -15,6 +15,37 @@ type automaticUpdateFake struct {
 	calls int
 }
 
+type selectedAutomaticUpdateFake struct {
+	legacyCalls   int
+	selectedCalls int
+	selectedErr   error
+}
+
+func (fake *selectedAutomaticUpdateFake) InstallCoreUpdate(context.Context) (web.CoreUpdateResult, error) {
+	fake.legacyCalls++
+	return web.CoreUpdateResult{Engine: state.EngineMihomo}, nil
+}
+
+func (fake *selectedAutomaticUpdateFake) InstallSelectedEngineUpdate(context.Context) (web.CoreUpdateResult, error) {
+	fake.selectedCalls++
+	return web.CoreUpdateResult{Engine: state.EngineSingBox}, fake.selectedErr
+}
+
+func TestAutomaticCoreUpdatesTreatsCustomEngineAsNoOp(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSettings(settingsRelativePath, state.Settings{"AUTO_UPDATE": "true"}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &selectedAutomaticUpdateFake{selectedErr: &web.PublicError{Code: "custom_engine_update_disabled"}}
+	service := NewAutomaticCoreUpdates(store, fake, nil)
+	if err := service.runOnce(context.Background()); err != nil {
+		t.Fatalf("custom engine automatic update = %v", err)
+	}
+}
+
 func (fake *automaticUpdateFake) InstallCoreUpdate(context.Context) (web.CoreUpdateResult, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
@@ -49,6 +80,24 @@ func TestAutomaticCoreUpdatesHonorsSetting(t *testing.T) {
 	}
 	if fake.count() != 1 {
 		t.Fatalf("update calls = %d", fake.count())
+	}
+}
+
+func TestAutomaticCoreUpdatesUsesExplicitSelectedEngineContract(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSettings(settingsRelativePath, state.Settings{"AUTO_UPDATE": "true"}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &selectedAutomaticUpdateFake{}
+	service := NewAutomaticCoreUpdates(store, fake, nil)
+	if err := service.runOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fake.selectedCalls != 1 || fake.legacyCalls != 0 {
+		t.Fatalf("selected calls = %d, legacy calls = %d", fake.selectedCalls, fake.legacyCalls)
 	}
 }
 

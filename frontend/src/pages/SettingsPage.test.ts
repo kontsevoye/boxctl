@@ -7,6 +7,10 @@ describe('settings update payload', () => {
 		const capabilities: Capabilities = { coreName: 'mihomo', pages: { proxies: true }, actions: {} }
 		expect(externalDashboardEnabled(capabilities)).toBe(false)
 		expect(externalDashboardEnabled({ ...capabilities, features: { externalDashboard: true } })).toBe(true)
+		expect(externalDashboardEnabled({ ...capabilities, features: { externalDashboard: true } }, {
+      id: 'sing-box', displayName: 'sing-box', configFormat: 'json', extensions: ['.json'], installed: true, compatible: true, selected: true, running: true, supportedCaptureModes: [],
+      management: { remoteProfiles: true, proxySubscriptions: true, localRuleLists: true, fakeIPCapture: true, updates: true, externalDashboard: true },
+    })).toBe(false)
 	})
 
 	it('enables dashboard install/update only when an action is available', () => {
@@ -118,4 +122,17 @@ describe('settings update payload', () => {
 
 		expect(settingsUpdatePayload(settings, lists).autoFakeIPIncludeExternalIPProviders).toBe(false)
 	})
+
+  it('keeps sing-box TUN settings in the payload even when their controls are hidden', () => {
+    const settings: Settings = {
+      language: 'en', theme: 'system', logLevel: 'info', updateChannel: 'stable',
+      captureMode: 'tun', startOnBoot: true, autoUpdate: false,
+      tunAddress: '172.19.0.1/30', tunMTU: 9000,
+    }
+    const lists = {
+      includedInterfaces: '', excludedInterfaces: '', reservedNetworks: '', bypassSources: '',
+      bypassTCPPorts: '', bypassUDPPorts: '', proxyOnlyTCPPorts: '', proxyOnlyUDPPorts: '',
+    }
+    expect(settingsUpdatePayload(settings, lists)).toMatchObject({ tunAddress: '172.19.0.1/30', tunMTU: 9000 })
+  })
 })

@@ -9,6 +9,7 @@ describe('configurationTabs', () => {
   it('keeps profiles available and adds the editor only when supported', () => {
     expect(configurationTabs(false)).toEqual(['profiles', 'subscriptions'])
     expect(configurationTabs(true)).toEqual(['profiles', 'subscriptions', 'editor'])
+    expect(configurationTabs(true, false)).toEqual(['profiles', 'editor'])
   })
 
   it('mounts a tab only after its first activation and keeps it mounted', () => {

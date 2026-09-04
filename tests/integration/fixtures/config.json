@@ -1,0 +1,25 @@
+{
+  "log": {
+    "level": "warn"
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "integration-dns",
+        "server": "192.168.112.15",
+        "server_port": 5353
+      }
+    ],
+    "final": "integration-dns"
+  },
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "final": "direct"
+  }
+}

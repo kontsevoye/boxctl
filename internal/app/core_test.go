@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kontsevoye/boxctl/internal/engine"
+	"github.com/kontsevoye/boxctl/internal/state"
 	"github.com/kontsevoye/boxctl/internal/web"
 )
 
@@ -270,6 +271,42 @@ func TestCoreServiceExternalDashboardIsDisabledByDefault(t *testing.T) {
 	}
 	if capabilities.Features["externalDashboard"] {
 		t.Fatal("external dashboard was enabled without explicit opt-in")
+	}
+}
+
+func TestCoreServiceCapabilitiesFollowSelectedEngineWhileStopped(t *testing.T) {
+	t.Parallel()
+	selected := state.EngineMihomo
+	service, err := NewCoreService(
+		&Lifecycle{snap: LifecycleSnapshot{State: LifecycleStopped}},
+		&corePreparerFake{},
+		newCoreBackendFake(),
+		CoreServiceOptions{
+			CoreName:                "core",
+			SelectedEngine:          func() string { return selected },
+			UnsafeExternalDashboard: true,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+
+	mihomoCapabilities, err := service.Capabilities(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mihomoCapabilities.CoreName != state.EngineMihomo || !mihomoCapabilities.Pages["ruleLists"] || !mihomoCapabilities.Features["externalDashboard"] {
+		t.Fatalf("stopped Mihomo capabilities = %+v", mihomoCapabilities)
+	}
+
+	selected = state.EngineSingBox
+	singBoxCapabilities, err := service.Capabilities(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if singBoxCapabilities.CoreName != state.EngineSingBox || singBoxCapabilities.Pages["ruleLists"] || singBoxCapabilities.Features["externalDashboard"] {
+		t.Fatalf("stopped sing-box capabilities = %+v", singBoxCapabilities)
 	}
 }
 
@@ -963,6 +1000,20 @@ func TestCoreServiceLogHistoryAndStreamAreBoundedAndRedacted(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("log stream did not close after context cancellation")
+	}
+}
+
+func TestCoreLogMetadataPreservesEngineHostStream(t *testing.T) {
+	t.Parallel()
+	entry := engine.LogEntry{Stream: "sing-box/stderr", Message: "native warning without a level prefix"}
+	if level := coreLogLevel(entry); level != "error" {
+		t.Fatalf("prefixed stderr level = %q, want error", level)
+	}
+	if component := coreLogComponent(entry.Stream); component != "core.sing-box.stderr" {
+		t.Fatalf("prefixed stderr component = %q", component)
+	}
+	if component := coreLogComponent("stdout"); component != "core.stdout" {
+		t.Fatalf("legacy stdout component = %q", component)
 	}
 }
 

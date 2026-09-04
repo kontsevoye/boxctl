@@ -83,9 +83,21 @@ func (manager *FakeIPCaptureManager) Prepare(source []byte, auto bool) (fakeIPCa
 
 // PrepareWithOptions is Prepare with an explicit provider-source policy.
 func (manager *FakeIPCaptureManager) PrepareWithOptions(source []byte, auto bool, options FakeIPCaptureOptions) (fakeIPCapturePolicy, error) {
+	return manager.prepareWithOptions(source, auto, options, true)
+}
+
+// PreviewWithOptions computes the same candidate policy as PrepareWithOptions
+// without publishing an AUTO block or changing the manager's shared warning
+// state. Explicit profile preparation uses this before its surrounding switch
+// transaction has a durable journal.
+func (manager *FakeIPCaptureManager) PreviewWithOptions(source []byte, auto bool, options FakeIPCaptureOptions) (fakeIPCapturePolicy, error) {
+	return manager.prepareWithOptions(source, auto, options, false)
+}
+
+func (manager *FakeIPCaptureManager) prepareWithOptions(source []byte, auto bool, options FakeIPCaptureOptions, persist bool) (fakeIPCapturePolicy, error) {
 	routing, policy, err := manager.parsePolicy(source)
 	if err != nil || !policy.Applicable {
-		if err == nil {
+		if err == nil && persist {
 			manager.setWarnings(nil)
 		}
 		return policy, err
@@ -95,12 +107,14 @@ func (manager *FakeIPCaptureManager) PrepareWithOptions(source []byte, auto bool
 		return fakeIPCapturePolicy{}, fmt.Errorf("read fake-IP destination pool: %w", err)
 	}
 	if auto {
-		document, policy.Warnings, err = manager.regenerate(routing, document, document.Revision, options)
-		manager.setWarnings(policy.Warnings)
+		document, policy.Warnings, err = manager.regenerate(routing, document, document.Revision, options, persist)
+		if persist {
+			manager.setWarnings(policy.Warnings)
+		}
 		if err != nil {
 			return fakeIPCapturePolicy{}, err
 		}
-	} else {
+	} else if persist {
 		manager.setWarnings(nil)
 	}
 	return finalizeFakeIPPolicy(policy, document), nil
@@ -138,7 +152,7 @@ func (manager *FakeIPCaptureManager) RegenerateWithOptions(source []byte, revisi
 	if err != nil {
 		return fakeIPCapturePolicy{}, fmt.Errorf("read fake-IP destination pool: %w", err)
 	}
-	document, policy.Warnings, err = manager.regenerate(routing, document, revision, options)
+	document, policy.Warnings, err = manager.regenerate(routing, document, revision, options, true)
 	manager.setWarnings(policy.Warnings)
 	if err != nil {
 		return fakeIPCapturePolicy{}, err
@@ -186,7 +200,7 @@ func finalizeFakeIPPolicy(policy fakeIPCapturePolicy, document fakeip.Document) 
 	return policy
 }
 
-func (manager *FakeIPCaptureManager) regenerate(routing configpkg.MihomoRouting, current fakeip.Document, revision string, options FakeIPCaptureOptions) (fakeip.Document, []string, error) {
+func (manager *FakeIPCaptureManager) regenerate(routing configpkg.MihomoRouting, current fakeip.Document, revision string, options FakeIPCaptureOptions, persist bool) (fakeip.Document, []string, error) {
 	// Regeneration is an optimistic mutation even when one of the providers is
 	// unavailable and the safe outcome is either a compatible LKG or a
 	// scope-narrowed partial block. Never turn either fallback into a way to
@@ -217,7 +231,12 @@ func (manager *FakeIPCaptureManager) regenerate(routing configpkg.MihomoRouting,
 	if manager != nil && manager.Now != nil {
 		generatedAt = manager.Now().UTC()
 	}
-	document, err := manager.store().ReplaceGeneratedWithScope(generated, revision, generatedAt, targetScope)
+	var document fakeip.Document
+	if persist {
+		document, err = manager.store().ReplaceGeneratedWithScope(generated, revision, generatedAt, targetScope)
+	} else {
+		document, err = manager.store().PreviewReplaceGeneratedWithScope(generated, revision, generatedAt, targetScope)
+	}
 	if err != nil {
 		return fakeip.Document{}, warnings, err
 	}

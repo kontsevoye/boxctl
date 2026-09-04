@@ -60,7 +60,7 @@ service_stopped() {
 	# SIGTERM cleanup window first; this idempotent pass also covers an earlier
 	# crash and only removes ownership-marked state.
 	if [ -f "$HANDOFF_MARKER" ]; then
-		logger -t boxctl "self-update handoff: preserving Mihomo and active dataplane"
+		logger -t boxctl "self-update handoff: preserving the active proxy core and dataplane"
 		return 0
 	fi
 	[ ! -x "$BOXCTL_BIN" ] || BOXCTL_ROOT="$BOXCTL_ROOT" "$BOXCTL_BIN" cleanup 2>/dev/null || true
@@ -73,7 +73,7 @@ reload_service() {
 manager_handoff() {
 	# Compatible self-updates replace the manager in-place. Keeping the procd
 	# instance alive is essential: procd intentionally kills descendants during
-	# stop/restart, including an otherwise detached Mihomo process.
+	# stop/restart, including an otherwise detached proxy-core process.
 	procd_send_signal boxctl '*' 12
 }
 

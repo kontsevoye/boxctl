@@ -4,6 +4,7 @@ import { APIError, request } from '../api'
 import { useApp } from '../app-context'
 import { canPerform } from '../capabilities'
 import { Badge, Empty, ErrorPanel, formatDate, Loading, PageHeader } from '../components/Common'
+import { legacyEngine, resourcesForEngine, selectedEngine } from '../engines'
 import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
 import type { FakeIPWhitelist, RuleList, RuleListDocument } from '../types'
@@ -19,7 +20,8 @@ const emptyForm: RuleListForm = { name: '', content: '', revision: '' }
 const rulePrefixes = ['DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'SRC-IP-CIDR', 'GEOIP', 'GEOSITE']
 
 export function RuleListsPage() {
-  const { capabilities } = useApp()
+  const { capabilities, engines: catalog } = useApp()
+  const engine = selectedEngine(catalog && catalog.length > 0 ? catalog : [legacyEngine(capabilities)])
   const { t } = useI18n()
   const query = useQuery<RuleList[]>('/rule-lists')
   const [selectedID, setSelectedID] = useState<string>()
@@ -67,7 +69,7 @@ export function RuleListsPage() {
       const document = creating
         ? await request<RuleListDocument>('/rule-lists', {
           method: 'POST',
-          body: JSON.stringify({ name: form.name, format: 'text', content: form.content }),
+          body: JSON.stringify({ name: form.name, format: 'text', content: form.content, ...(engine ? { engine: engine.id } : {}) }),
         })
         : await request<RuleListDocument>(`/rule-lists/${encodeURIComponent(selectedID ?? '')}`, {
           method: 'PUT',
@@ -135,6 +137,7 @@ export function RuleListsPage() {
   </form>
 
   const conflict = error?.status === 409 || error?.code === 'conflict'
+  const lists = resourcesForEngine(query.data, engine?.id)
   return <>
     <PageHeader title={t('ruleLists')} actions={<>
       {canPerform(capabilities, 'createRuleList') && <button className="du-btn du-btn-primary du-btn-sm" onClick={startCreate}>{t('createRuleList')}</button>}
@@ -142,14 +145,14 @@ export function RuleListsPage() {
     </>} />
     {error && <ErrorPanel error={error} />}
     {conflict && selectedID && <div className="du-alert du-alert-info"><strong>{t('revisionConflict')}</strong><button className="du-btn du-btn-outline du-btn-sm" onClick={() => {
-      const list = query.data?.find((item) => item.id === selectedID)
+      const list = lists?.find((item) => item.id === selectedID)
       if (list) void open(list)
     }}>{t('reloadLatest')}</button></div>}
     <div className="rule-lists-stack">
       <section className="du-card panel rule-list-accordion">
         {query.loading && !query.data && <Loading />}
         {query.error && <ErrorPanel error={query.error} onRetry={query.reload} />}
-        {query.data && query.data.length === 0 && !creating && <Empty />}
+        {lists && lists.length === 0 && !creating && <Empty />}
         {creating && <article className="rule-list-item expanded">
           <header className="rule-list-summary static">
             <div className="rule-list-toggle">
@@ -159,7 +162,7 @@ export function RuleListsPage() {
           </header>
           {editor()}
         </article>}
-        {query.data?.map((list) => {
+        {lists?.map((list) => {
           const expanded = !creating && selectedID === list.id
           return <article className={expanded ? 'rule-list-item expanded' : 'rule-list-item'} key={list.id}>
             <header className="rule-list-summary">
@@ -187,7 +190,7 @@ export function RuleListsPage() {
           </article>
         })}
       </section>
-      <FakeIPWhitelistPanel editable={canPerform(capabilities, 'editRuleList')} />
+      {engine?.management.fakeIPCapture !== false && <FakeIPWhitelistPanel editable={canPerform(capabilities, 'editRuleList')} engine={engine?.id} />}
     </div>
   </>
 }
@@ -197,7 +200,7 @@ export function appendRulePrefix(content: string, prefix: string): string {
   return `${content}${separator}${prefix},`
 }
 
-function FakeIPWhitelistPanel({ editable }: { editable: boolean }) {
+function FakeIPWhitelistPanel({ editable, engine }: { editable: boolean; engine?: string }) {
   const { locale, t } = useI18n()
   const query = useQuery<FakeIPWhitelist>('/fake-ip-whitelist')
   const [document, setDocument] = useState<FakeIPWhitelist>()
@@ -258,6 +261,7 @@ function FakeIPWhitelistPanel({ editable }: { editable: boolean }) {
   if (query.loading && !document) return <section className="du-card panel fake-ip-panel"><Loading /></section>
   if (query.error && !document) return <section className="du-card panel fake-ip-panel"><ErrorPanel error={query.error} onRetry={query.reload} /></section>
   if (!document) return null
+  if (engine && document.engine && document.engine !== engine) return null
 
   const generatedContent = document.generatedCIDRs.length > 0
     ? document.generatedCIDRs.join('\n')

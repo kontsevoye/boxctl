@@ -3,15 +3,22 @@ import { useApp } from '../app-context'
 import { canShowPage } from '../capabilities'
 import { PageHeader } from '../components/Common'
 import { useI18n } from '../i18n'
+import { legacyEngine, selectedEngine } from '../engines'
+import type { EngineID, EngineInfo } from '../types'
 import { ProfilesPage } from './ProfilesPage'
 import { ProxySubscriptionsPage } from './ProxySubscriptionsPage'
 import { RawConfigPage } from './RawConfigPage'
 import './ConfigurationPage.css'
 
 export type ConfigurationTab = 'profiles' | 'subscriptions' | 'editor'
+export type EngineFilter = 'active' | EngineID
 
-export function configurationTabs(rawConfigAvailable: boolean): ConfigurationTab[] {
-  return rawConfigAvailable ? ['profiles', 'subscriptions', 'editor'] : ['profiles', 'subscriptions']
+export function configurationTabs(rawConfigAvailable: boolean, subscriptionsAvailable = true): ConfigurationTab[] {
+  return [
+    'profiles',
+    ...(subscriptionsAvailable ? ['subscriptions' as const] : []),
+    ...(rawConfigAvailable ? ['editor' as const] : []),
+  ]
 }
 
 export function activateConfigurationTab(mounted: ConfigurationTab[], tab: ConfigurationTab): ConfigurationTab[] {
@@ -19,10 +26,15 @@ export function activateConfigurationTab(mounted: ConfigurationTab[], tab: Confi
 }
 
 export function ConfigurationPage({ initialTab = 'editor' }: { initialTab?: ConfigurationTab }) {
-  const { capabilities } = useApp()
+  const { capabilities, engines: catalog } = useApp()
   const { t } = useI18n()
-  const rawConfigAvailable = canShowPage(capabilities, 'rawConfig')
-  const tabs = configurationTabs(rawConfigAvailable)
+  const engines = catalog && catalog.length > 0 ? catalog : [legacyEngine(capabilities)]
+  const [engineFilter, setEngineFilter] = useState<EngineFilter>('active')
+  const [editorDirty, setEditorDirty] = useState(false)
+  const engine = resolveEngineFilter(engines, engineFilter)
+  const rawConfigAvailable = catalog !== undefined || canShowPage(capabilities, 'rawConfig')
+  const subscriptionsAvailable = engine?.management.proxySubscriptions ?? canShowPage(capabilities, 'proxySubscriptions')
+  const tabs = configurationTabs(rawConfigAvailable, subscriptionsAvailable)
   const [tab, setTab] = useState<ConfigurationTab>(() => tabs.includes(initialTab) ? initialTab : 'profiles')
   const [mountedTabs, setMountedTabs] = useState<ConfigurationTab[]>(() => [tabs.includes(initialTab) ? initialTab : 'profiles'])
 
@@ -32,25 +44,32 @@ export function ConfigurationPage({ initialTab = 'editor' }: { initialTab?: Conf
   }
 
   useEffect(() => {
-    if (tab === 'editor' && !rawConfigAvailable) {
+    if (!tabs.includes(tab)) {
       setMountedTabs((current) => activateConfigurationTab(current, 'profiles'))
       setTab('profiles')
     }
-  }, [rawConfigAvailable, tab])
+  }, [tab, tabs])
 
   return <>
-    <PageHeader title={t('configuration')} description={t('configurationHint')} />
+    <PageHeader title={t('configuration')} description={t('configurationHint')} actions={<label className="configuration-engine-filter"><span>{t('engine')}</span><select className="du-select du-select-sm" value={engineFilter} onChange={(event) => {
+      if (editorDirty && !window.confirm(t('discardUnsavedConfig'))) return
+      setEngineFilter(event.currentTarget.value as EngineFilter)
+    }}><option value="active">{t('activeEngine')}</option>{engines.map((item) => <option value={item.id} key={item.id}>{item.displayName}</option>)}</select></label>} />
     <div className="du-tabs du-tabs-box section-tabs configuration-tabs" role="tablist" aria-label={t('configuration')}>
       <button className={`du-tab ${tab === 'profiles' ? 'du-tab-active' : ''}`} role="tab" aria-selected={tab === 'profiles'} aria-controls="configuration-profiles" onClick={() => selectTab('profiles')}>{t('profiles')}</button>
-      <button className={`du-tab ${tab === 'subscriptions' ? 'du-tab-active' : ''}`} role="tab" aria-selected={tab === 'subscriptions'} aria-controls="configuration-subscriptions" onClick={() => selectTab('subscriptions')}>{t('proxySubscriptions')}</button>
-      {tabs.includes('editor') && <button className={`du-tab ${tab === 'editor' ? 'du-tab-active' : ''}`} role="tab" aria-selected={tab === 'editor'} aria-controls="configuration-editor" onClick={() => selectTab('editor')}>{t('yamlEditor')}</button>}
+      {tabs.includes('subscriptions') && <button className={`du-tab ${tab === 'subscriptions' ? 'du-tab-active' : ''}`} role="tab" aria-selected={tab === 'subscriptions'} aria-controls="configuration-subscriptions" onClick={() => selectTab('subscriptions')}>{t('proxySubscriptions')}</button>}
+      {tabs.includes('editor') && <button className={`du-tab ${tab === 'editor' ? 'du-tab-active' : ''}`} role="tab" aria-selected={tab === 'editor'} aria-controls="configuration-editor" onClick={() => selectTab('editor')}>{t('configEditor')}</button>}
     </div>
-    {mountedTabs.includes('subscriptions') && <div id="configuration-subscriptions" role="tabpanel" hidden={tab !== 'subscriptions'} aria-hidden={tab !== 'subscriptions'}><ProxySubscriptionsPage /></div>}
+    {tabs.includes('subscriptions') && mountedTabs.includes('subscriptions') && <div id="configuration-subscriptions" role="tabpanel" hidden={tab !== 'subscriptions'} aria-hidden={tab !== 'subscriptions'}><ProxySubscriptionsPage engine={engine} /></div>}
     {mountedTabs.includes('profiles') && <div id="configuration-profiles" role="tabpanel" hidden={tab !== 'profiles'} aria-hidden={tab !== 'profiles'}>
-      <ProfilesPage embedded />
+      <ProfilesPage embedded engine={engine} />
     </div>}
     {tabs.includes('editor') && mountedTabs.includes('editor') && <div id="configuration-editor" role="tabpanel" hidden={tab !== 'editor'} aria-hidden={tab !== 'editor'}>
-      <RawConfigPage embedded />
+      <RawConfigPage embedded engine={engine} onDirtyChange={setEditorDirty} />
     </div>}
   </>
+}
+
+export function resolveEngineFilter(engines: EngineInfo[], filter: EngineFilter): EngineInfo | undefined {
+  return filter === 'active' ? selectedEngine(engines) : engines.find((engine) => engine.id === filter)
 }

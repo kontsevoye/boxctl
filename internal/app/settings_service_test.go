@@ -242,6 +242,59 @@ func TestSettingsServiceRuntimeProviderChangesRequireRestart(t *testing.T) {
 	}
 }
 
+func TestSettingsServiceScopesEngineSpecificRestartSettings(t *testing.T) {
+	t.Run("Mihomo ignores sing-box TUN address", func(t *testing.T) {
+		service, err := NewSettingsService(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.SelectedEngine = func() string { return state.EngineMihomo }
+		var restart bool
+		service.OnChanged = func(_ context.Context, required bool) error { restart = required; return nil }
+		address := "172.20.0.1/30"
+		if _, err := service.UpdateSettings(context.Background(), web.SettingsPatch{TUNAddress: &address}); err != nil {
+			t.Fatal(err)
+		}
+		if restart {
+			t.Fatal("Mihomo was restarted for a sing-box-only TUN address")
+		}
+	})
+
+	t.Run("sing-box ignores Mihomo provider settings", func(t *testing.T) {
+		service, err := NewSettingsService(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.SelectedEngine = func() string { return state.EngineSingBox }
+		var restart bool
+		service.OnChanged = func(_ context.Context, required bool) error { restart = required; return nil }
+		enabled := true
+		if _, err := service.UpdateSettings(context.Background(), web.SettingsPatch{UseTmpfsRules: &enabled}); err != nil {
+			t.Fatal(err)
+		}
+		if restart {
+			t.Fatal("sing-box was restarted for a Mihomo-only provider setting")
+		}
+	})
+
+	t.Run("sing-box TUN address requires restart", func(t *testing.T) {
+		service, err := NewSettingsService(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.SelectedEngine = func() string { return state.EngineSingBox }
+		var restart bool
+		service.OnChanged = func(_ context.Context, required bool) error { restart = required; return nil }
+		address := "172.20.0.1/30"
+		if _, err := service.UpdateSettings(context.Background(), web.SettingsPatch{TUNAddress: &address}); err != nil {
+			t.Fatal(err)
+		}
+		if !restart {
+			t.Fatal("sing-box TUN address did not require a restart")
+		}
+	})
+}
+
 func boolPointer(value bool) *bool {
 	return &value
 }

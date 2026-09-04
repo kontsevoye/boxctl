@@ -10,6 +10,7 @@ import (
 
 	"github.com/kontsevoye/boxctl/internal/engine"
 	"github.com/kontsevoye/boxctl/internal/fakeip"
+	"github.com/kontsevoye/boxctl/internal/state"
 	"github.com/kontsevoye/boxctl/internal/web"
 )
 
@@ -120,12 +121,17 @@ func (service *FakeIPWhitelistService) restartRunning(ctx context.Context) error
 	if service.Lifecycle == nil {
 		return nil
 	}
+	snapshot := service.Lifecycle.Snapshot()
+	if snapshot.State != LifecycleRunning || normalizedEngine(snapshot.Prepared.Engine) != state.EngineMihomo {
+		return nil
+	}
 	_, err := service.Lifecycle.RestartIfRunning(ctx)
 	return err
 }
 
 func (service *FakeIPWhitelistService) webDocument(policy fakeIPCapturePolicy) web.FakeIPWhitelistDocument {
 	document := web.FakeIPWhitelistDocument{
+		Engine:         state.EngineMihomo,
 		ManualContent:  policy.Document.ManualContent,
 		GeneratedCIDRs: prefixStrings(policy.Document.Generated),
 		FakeIPRanges:   prefixStrings(policy.FakeIPRanges),
@@ -144,7 +150,7 @@ func (service *FakeIPWhitelistService) webDocument(policy fakeIPCapturePolicy) w
 	}
 	if service.Lifecycle != nil {
 		snapshot := service.Lifecycle.Snapshot()
-		if snapshot.State == LifecycleRunning {
+		if snapshot.State == LifecycleRunning && normalizedEngine(snapshot.Prepared.Engine) == state.EngineMihomo {
 			document.Applied = captureMatchesFakeIPPolicy(snapshot.Prepared.Capture, policy)
 			document.RestartRequired = !document.Applied
 		}

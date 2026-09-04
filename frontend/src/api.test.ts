@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { contentDispositionFilename, exportBackup, importBackup, login, onAuthenticationExpired, request, setCSRFToken } from './api'
+import { contentDispositionFilename, exportBackup, importBackup, login, onAuthenticationExpired, request, requestWithFallback, setCSRFToken } from './api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -48,6 +48,35 @@ describe('API client', () => {
       message: 'Revision changed',
       requestId: 'req-1',
     })
+  })
+
+  it('uses a legacy endpoint only when the new endpoint is unavailable', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => String(input).includes('/profiles/')
+      ? new Response(JSON.stringify({ error: { code: 'not_found', message: 'Not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+      : new Response(JSON.stringify({ data: { revision: 'legacy' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(requestWithFallback('/profiles/default/config', '/config')).resolves.toEqual({ revision: 'legacy' })
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/v1/profiles/default/config', '/api/v1/config'])
+  })
+
+  it('does not hide validation or conflict errors behind a legacy fallback', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { code: 'revision_conflict', message: 'Changed' } }), { status: 409, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(requestWithFallback('/profiles/default/config', '/config')).rejects.toMatchObject({ status: 409 })
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('does not redirect a missing profile mutation to the active legacy config', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { code: 'not_found', message: 'Not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(requestWithFallback('/profiles/stale/config', '/config', {
+      method: 'PUT',
+      body: JSON.stringify({ content: 'mode: direct\n' }),
+    })).rejects.toMatchObject({ status: 404 })
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 
   it('notifies the application when an established API session expires', async () => {

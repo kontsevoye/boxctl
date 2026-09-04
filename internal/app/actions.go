@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"github.com/kontsevoye/boxctl/internal/platform/openwrt"
 	"github.com/kontsevoye/boxctl/internal/rulelist"
 	"github.com/kontsevoye/boxctl/internal/state"
+	updatepkg "github.com/kontsevoye/boxctl/internal/update"
 	"github.com/kontsevoye/boxctl/internal/web"
 )
 
@@ -469,7 +471,7 @@ func (actions *Actions) firewall(ctx context.Context, action, reportedTUN string
 				return nil
 			}
 		}
-		if err := mihomoPreparedReady(ctx, prepared); err != nil {
+		if err := preparedCoreReady(ctx, prepared); err != nil {
 			return fmt.Errorf("core readiness check failed: %w", err)
 		}
 		switch action {
@@ -574,6 +576,72 @@ func (actions *Actions) ValidateConfig(ctx context.Context, path string) error {
 	return actions.validateConfig(ctx, root, filepath.Clean(path))
 }
 
+func (actions *Actions) ValidateEngineConfig(ctx context.Context, options cli.ConfigValidateOptions) error {
+	if options.Engine == "" || options.Engine == state.EngineMihomo {
+		return actions.ValidateConfig(ctx, options.File)
+	}
+	if options.Engine != state.EngineSingBox {
+		return fmt.Errorf("unsupported configuration engine %q", options.Engine)
+	}
+	root, err := actions.resolveRoot("")
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(options.File) {
+		return errors.New("configuration path must be absolute")
+	}
+	content, err := readBoundedRegular(filepath.Clean(options.File), 32<<20)
+	if err != nil {
+		return err
+	}
+	driver := engine.NewSingBoxDriver(engine.SingBoxOptions{})
+	preparer, err := NewActiveSingBoxPreparer(root, driver)
+	if err != nil {
+		return err
+	}
+	return preparer.ValidateContent(ctx, content)
+}
+
+func (actions *Actions) InstallEngine(ctx context.Context, options cli.EngineInstallOptions) error {
+	if options.Engine != state.EngineSingBox {
+		return fmt.Errorf("unsupported managed engine %q", options.Engine)
+	}
+	root, err := actions.resolveRoot(options.Root)
+	if err != nil {
+		return err
+	}
+	archivePath := filepath.Clean(strings.TrimSpace(options.File))
+	if !filepath.IsAbs(archivePath) {
+		return errors.New("engine archive path must be absolute")
+	}
+	digest, err := updatepkg.ResolveLocalSHA256(archivePath, options.SHA256)
+	if err != nil {
+		return fmt.Errorf("resolve engine archive checksum: %w", err)
+	}
+	managerLock, err := acquireManagerLock(ctx, root, serveLockTimeout)
+	if err != nil {
+		return fmt.Errorf("install engine only while boxctl is stopped: %w", err)
+	}
+	defer func() { _ = managerLock.Unlock() }()
+	layout, err := state.NewLayout(root)
+	if err != nil {
+		return err
+	}
+	engineRoot := filepath.Join(layout.EnginesDir, state.EngineSingBox)
+	installer := updatepkg.SingBoxInstaller{}
+	staged, err := installer.StageLocalArchive(ctx, archivePath, digest, engineRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = staged.Cleanup() }()
+	pointer, err := updatepkg.PublishSingBoxVersion(engineRoot, staged)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(actions.out, "installed sing-box %s (%s)\n", pointer.Current.Version, pointer.Current.Source)
+	return err
+}
+
 // Doctor performs existence, format, and platform checks only. It never calls
 // mutating OpenWrt commands and never prints config content or credentials.
 func (actions *Actions) Doctor(ctx context.Context, options cli.DoctorOptions) error {
@@ -591,22 +659,33 @@ func (actions *Actions) Doctor(ctx context.Context, options cli.DoctorOptions) e
 	rootInfo, rootErr := os.Stat(root)
 	report.add("root", layoutErr == nil && rootErr == nil && rootInfo.IsDir(), publicCheckError(errors.Join(layoutErr, rootErr), "root does not exist"))
 	if layoutErr == nil && rootErr == nil && rootInfo.IsDir() {
-		mihomoInfo, mihomoErr := os.Stat(filepath.Join(layout.EnginesDir, state.EngineMihomo, state.EngineMihomo))
-		report.add("mihomo-binary", mihomoErr == nil && mihomoInfo.Mode().IsRegular() && mihomoInfo.Mode()&0o111 != 0, "Mihomo executable is missing")
-		configInfo, configErr := os.Stat(layout.MihomoConfig)
-		hasMihomoConfig := configErr == nil && configInfo.Mode().IsRegular()
-		report.add("mihomo-config", hasMihomoConfig, "config.yaml is missing")
 		store, storeErr := state.NewStore(root)
 		if storeErr == nil {
 			_, storeErr = LoadRuntimeSettings(store)
 		}
 		report.add("settings", storeErr == nil, publicCheckError(storeErr, "settings are invalid"))
-		if hasMihomoConfig {
-			content, readErr := readBoundedRegular(layout.MihomoConfig, 32<<20)
-			if readErr == nil {
-				_, readErr = configpkg.InspectMihomo(content)
+		profiles, profilesErr := state.NewProfileStore(root)
+		selected := state.ActiveProfile{Engine: state.EngineMihomo}
+		if profilesErr == nil {
+			active, activeErr := profiles.Current()
+			switch {
+			case activeErr == nil:
+				selected = active
+			case !errors.Is(activeErr, fs.ErrNotExist):
+				profilesErr = activeErr
 			}
-			report.add("config-structure", readErr == nil, publicCheckError(readErr, "config.yaml structure is invalid"))
+		}
+		report.SelectedEngine = selected.Engine
+		report.add("selected-engine", profilesErr == nil, publicCheckError(profilesErr, "active profile metadata is invalid"))
+		if profilesErr == nil {
+			switch selected.Engine {
+			case state.EngineMihomo:
+				doctorMihomo(&report, layout)
+			case state.EngineSingBox:
+				doctorSingBox(ctx, &report, layout, profiles, selected)
+			default:
+				report.add("selected-engine-supported", false, "selected profile uses an unsupported engine")
+			}
 		}
 	}
 	if options.JSON {
@@ -621,6 +700,62 @@ func (actions *Actions) Doctor(ctx context.Context, options cli.DoctorOptions) e
 		return nil
 	}
 	return &DoctorError{Failures: report.failureCount()}
+}
+
+func doctorMihomo(report *DoctorReport, layout state.Layout) {
+	binary := filepath.Join(layout.EnginesDir, state.EngineMihomo, state.EngineMihomo)
+	report.add("mihomo-binary", regularExecutable(binary), "Mihomo executable is missing")
+	configInfo, configErr := os.Lstat(layout.MihomoConfig)
+	hasConfig := configErr == nil && configInfo.Mode().IsRegular() && configInfo.Mode()&os.ModeSymlink == 0
+	report.add("mihomo-config", hasConfig, publicCheckError(configErr, "config.yaml is missing"))
+	if !hasConfig {
+		return
+	}
+	content, readErr := readBoundedRegular(layout.MihomoConfig, 32<<20)
+	if readErr == nil {
+		_, readErr = configpkg.InspectMihomo(content)
+	}
+	report.add("config-structure", readErr == nil, publicCheckError(readErr, "config.yaml structure is invalid"))
+}
+
+func doctorSingBox(ctx context.Context, report *DoctorReport, layout state.Layout, profiles state.ProfileStore, selected state.ActiveProfile) {
+	binary, metadata, binaryErr := resolveSingBoxBinary(layout)
+	if binaryErr == nil && !regularExecutable(binary) {
+		binaryErr = errors.New("sing-box binary is not a regular executable")
+	}
+	report.add("sing-box-binary", binaryErr == nil, publicCheckError(binaryErr, "sing-box executable is missing"))
+
+	driver := engine.NewSingBoxDriver(engine.SingBoxOptions{})
+	var versionErr error
+	if binaryErr == nil {
+		var output string
+		output, versionErr = driver.Version(ctx, binary)
+		if versionErr == nil && !singBoxVersionLine.MatchString(output) {
+			versionErr = errors.New("unsupported sing-box version; require >=1.14.0,<1.15.0")
+		}
+		if versionErr == nil && metadata.Version != "" {
+			match := singBoxVersionLine.FindStringSubmatch(output)
+			if len(match) != 2 || match[1] != metadata.Version {
+				versionErr = errors.New("managed sing-box version does not match current.json")
+			}
+		}
+	} else {
+		versionErr = binaryErr
+	}
+	report.add("sing-box-version", versionErr == nil, publicCheckError(versionErr, "sing-box version is incompatible"))
+
+	content, configErr := profiles.Get(selected)
+	report.add("sing-box-config", configErr == nil, publicCheckError(configErr, "selected sing-box profile is missing"))
+	if configErr != nil || versionErr != nil {
+		return
+	}
+	preparer, prepareErr := NewActiveSingBoxPreparer(layout.Root, driver)
+	if prepareErr == nil {
+		preparer.BinaryOverride = binary
+		preparer.ControllerSecretOverride = "boxctl-read-only-validation-secret-000000000000"
+		prepareErr = preparer.ValidateContent(ctx, content)
+	}
+	report.add("config-native", prepareErr == nil, "sing-box rejected the selected native JSON configuration")
 }
 
 func (actions *Actions) requirePlatform(ctx context.Context) error {
@@ -866,12 +1001,53 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	if err != nil {
 		return nil, err
 	}
-	driverOptions := engine.MihomoOptions{}
+	mihomoOptions := engine.MihomoOptions{}
+	singBoxOptions := engine.SingBoxOptions{ClashAPIAllowedOrigins: singBoxControllerOrigins(options.PublicOrigin)}
 	if runtime.GOOS == "linux" {
-		driverOptions.ProcessStatePath = filepath.Join(layout.StateDir, "mihomo-process.json")
+		// Both mutually-exclusive drivers share the historical state path. The
+		// v2 record is engine-qualified, while Mihomo can still adopt and upgrade
+		// a live v1 process during the migration release.
+		processStatePath := filepath.Join(layout.StateDir, "mihomo-process.json")
+		mihomoOptions.ProcessStatePath = processStatePath
+		singBoxOptions.ProcessStatePath = processStatePath
 	}
-	driver := engine.NewMihomoDriver(driverOptions)
-	preparer, err := NewActiveMihomoPreparer(root, driver)
+	mihomoDriver := engine.NewMihomoDriver(mihomoOptions)
+	singBoxDriver := engine.NewSingBoxDriver(singBoxOptions)
+	mihomoPreparer, err := NewActiveMihomoPreparer(root, mihomoDriver)
+	if err != nil {
+		return nil, err
+	}
+	singBoxPreparer, err := NewActiveSingBoxPreparer(root, singBoxDriver)
+	if err != nil {
+		return nil, err
+	}
+	enginePreparer := &EnginePreparer{
+		Profiles: mihomoPreparer.Profiles,
+		Preparers: map[string]ExplicitProfilePreparer{
+			state.EngineMihomo:  mihomoPreparer,
+			state.EngineSingBox: singBoxPreparer,
+		},
+		Legacy: mihomoPreparer,
+	}
+	host, err := NewEngineHost(map[string]CoreBackend{
+		state.EngineMihomo: mihomoDriver, state.EngineSingBox: singBoxDriver,
+	}, func() string {
+		active, currentErr := mihomoPreparer.Profiles.Current()
+		if currentErr == nil {
+			return active.Engine
+		}
+		return state.EngineMihomo
+	})
+	if err != nil {
+		return nil, err
+	}
+	hostOwned := true
+	defer func() {
+		if hostOwned {
+			_ = host.Close()
+		}
+	}()
+	profilesService, err := NewProfilesService(root, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -884,8 +1060,32 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		activation = noopActivation{}
 	}
 	lifecycle := &Lifecycle{
-		Preparer: preparer, Core: driver, Activation: activation, Logger: logger,
-		OnStarted: func() error { return preparer.State.RemoveRegular(state.FirstStartPending) },
+		Preparer: enginePreparer, Core: host, Activation: activation, Logger: logger,
+	}
+	lifecycle.OnStarted = func(prepared engine.PreparedCore) error {
+		markerErr := mihomoPreparer.State.RemoveRegular(state.FirstStartPending)
+		active, activeErr := mihomoPreparer.Profiles.Current()
+		if activeErr != nil {
+			if errors.Is(activeErr, fs.ErrNotExist) {
+				return markerErr
+			}
+			return errors.Join(markerErr, activeErr)
+		}
+		if preparedMatchesProfile(layout, prepared, active) && prepared.SourceRevision != "" {
+			return errors.Join(markerErr, profilesService.Revisions.MarkAppliedRevision(context.Background(), active, prepared.SourceRevision))
+		}
+		return markerErr
+	}
+	switcher := &ProfileSwitcher{
+		State: mihomoPreparer.State, Profiles: mihomoPreparer.Profiles, Preparer: enginePreparer,
+		Lifecycle: lifecycle, Revisions: profilesService.Revisions,
+	}
+	if err := switcher.RecoverSelection(); err != nil {
+		return nil, fmt.Errorf("recover interrupted profile selection: %w", err)
+	}
+	recoveryProfile, recoveryRevision, recovering, err := switcher.RecoveryProfile()
+	if err != nil {
+		return nil, fmt.Errorf("inspect interrupted profile selection: %w", err)
 	}
 	requested, markerErr := validManagerHandoff(root, buildinfo.Version)
 	if markerErr != nil {
@@ -893,23 +1093,63 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		_ = removeManagerHandoff(layout)
 	}
 	handoffAdopted := false
-	if !options.NoCore && (requested || !options.StartStopped) && runtime.GOOS == "linux" {
-		prepared, health, adoptErr := driver.Adopt(ctx)
+	if shouldAttemptCoreAdoption(options.NoCore, runtime.GOOS) {
+		selected, selectedErr := selectedProfile(mihomoPreparer.Profiles)
+		if selectedErr != nil && !errors.Is(selectedErr, fs.ErrNotExist) {
+			return nil, selectedErr
+		}
+		selectedEngine := state.EngineMihomo
+		if selectedErr == nil {
+			selectedEngine = selected.Engine
+		}
+		prepared, health, adoptErr := adoptSelectedEngine(ctx, selectedEngine, map[string]adoptableCore{
+			state.EngineMihomo: mihomoDriver, state.EngineSingBox: singBoxDriver,
+		}, logger)
 		if adoptErr == nil {
-			if adoptErr = lifecycle.Adopt(prepared, health); adoptErr != nil {
-				logger.Error("could not adopt the live selective-routing generation; starting with normal lifecycle recovery", "error", adoptErr)
-			} else {
-				handoffAdopted = requested
+			adoptErr = host.SetAdopted(prepared.Engine)
+		}
+		if adoptErr == nil {
+			matchesSelection := selectedErr == nil && preparedMatchesProfileRevision(layout, mihomoPreparer.Profiles, prepared, selected, "")
+			if recovering {
+				matchesSelection = recoveryProfile != nil && preparedMatchesProfileRevision(
+					layout, mihomoPreparer.Profiles, prepared, *recoveryProfile, recoveryRevision,
+				)
 			}
+			if !matchesSelection {
+				logger.Warn("stopping an interrupted core generation which does not match the recovered selection",
+					"runningEngine", prepared.Engine, "selectedEngine", selectedEngine)
+			}
+			handoffAdopted, adoptErr = acceptAdoptedGeneration(
+				ctx, lifecycle, prepared, health, requested, matchesSelection, options.StartStopped,
+			)
 		} else if !errors.Is(adoptErr, os.ErrNotExist) {
-			logger.Error("could not adopt Mihomo from the previous manager; starting with normal lifecycle recovery", "error", adoptErr)
+			logger.Error("could not adopt the previous core generation; starting with normal lifecycle recovery", "error", adoptErr)
+		}
+		if recovering {
+			if adoptErr != nil && !errors.Is(adoptErr, os.ErrNotExist) {
+				return nil, fmt.Errorf("reconcile interrupted profile switch runtime: %w", adoptErr)
+			}
+			if completeErr := switcher.CompleteRecovery(ctx); completeErr != nil {
+				return nil, fmt.Errorf("complete interrupted profile switch recovery: %w", completeErr)
+			}
+			recovering = false
 		}
 		if requested && adoptErr != nil {
 			return nil, fmt.Errorf("complete core-preserving manager handoff: %w", adoptErr)
 		}
 	}
+	if recovering && (options.NoCore || runtime.GOOS != "linux") {
+		// Persistent process adoption exists only for the normal Linux/OpenWrt
+		// runtime. With --no-core, retain the journal for a later normal start;
+		// on other platforms no process can survive this manager instance.
+		if !options.NoCore {
+			if err := switcher.CompleteRecovery(ctx); err != nil {
+				return nil, fmt.Errorf("complete metadata-only profile switch recovery: %w", err)
+			}
+		}
+	}
 	if requested && !handoffAdopted {
-		return nil, errors.New("complete core-preserving manager handoff: Mihomo adoption is unavailable")
+		return nil, errors.New("complete core-preserving manager handoff: core adoption is unavailable")
 	}
 	if !requested {
 		if removeErr := removeManagerHandoff(layout); removeErr != nil {
@@ -921,7 +1161,7 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	var automaticUpdates *AutomaticCoreUpdates
 	stopAutomaticUpdates := func() {}
 	if !options.NoCore && !options.NoGateway {
-		maintenance = NewPeriodicMaintenance(preparer.State, preparer, lifecycle, openWrtActivation, logger)
+		maintenance = NewPeriodicMaintenance(mihomoPreparer.State, mihomoPreparer, lifecycle, openWrtActivation, logger)
 	}
 	credentials, err := NewCredentialStore(root)
 	if err != nil {
@@ -929,14 +1169,21 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	}
 
 	services := web.Services{Credentials: credentials, Status: &StatusService{
-		Lifecycle: lifecycle, Profiles: preparer.Profiles, Control: driver, StartedAt: time.Now().UTC(),
+		Lifecycle: lifecycle, Profiles: mihomoPreparer.Profiles, Control: host, Host: host,
+		Revisions: profilesService.Revisions, Switcher: switcher, StartedAt: time.Now().UTC(),
 	}}
+	services.Engines = &EngineCatalogService{
+		Layout: layout, Profiles: mihomoPreparer.Profiles, Lifecycle: lifecycle, Host: host,
+		SingBoxVersion:          singBoxDriver.Version,
+		UnsafeExternalDashboard: options.UnsafeExternalDashboard,
+	}
 	services.SessionSecrets = credentials
 	services.AdminSetup = credentials
 	settingsService, err := NewSettingsService(root)
 	if err != nil {
 		return nil, err
 	}
+	settingsService.SelectedEngine = func() string { return selectedProfileEngine(mihomoPreparer.Profiles) }
 	settingsService.DiscoverInterfaces = func(discoveryContext context.Context) (web.InterfaceCatalog, error) {
 		discovery, discoveryErr := openWrtActivation.gateway.Detect(discoveryContext)
 		if discoveryErr != nil {
@@ -944,21 +1191,32 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		}
 		return runtimeInterfaceCatalog(discovery), nil
 	}
-	configService := &ConfigService{Preparer: preparer}
+	configService := &ConfigService{
+		Preparer: mihomoPreparer, EnginePreparer: enginePreparer, Lifecycle: lifecycle,
+		Revisions: profilesService.Revisions, MutationMu: &profilesService.mutationMu,
+	}
+	configService.ValidateEngine = func(validateContext context.Context, engineName string, content []byte) error {
+		switch engineName {
+		case state.EngineMihomo:
+			return configService.ValidateMihomoContent(validateContext, content)
+		case state.EngineSingBox:
+			return singBoxPreparer.ValidateContent(validateContext, content)
+		default:
+			return engine.ErrUnsupported
+		}
+	}
 	configService.OnChanged = func(callbackContext context.Context) (bool, error) {
 		return lifecycle.RestartIfRunning(callbackContext)
 	}
-	profilesService, err := NewProfilesService(root, nil)
-	if err != nil {
-		return nil, err
-	}
 	profilesService.ValidateMihomo = configService.ValidateMihomoContent
+	profilesService.ValidateSingBox = singBoxPreparer.ValidateContent
+	profilesService.SwitchProfile = switcher.Switch
 	proxySubscriptions, err := NewProxySubscriptionsService(root, nil)
 	if err != nil {
 		return nil, err
 	}
-	preparer.Subscriptions = proxySubscriptions
-	rules := &rulelist.Store{Directory: preparer.Layout.LocalRulesDir}
+	mihomoPreparer.Subscriptions = proxySubscriptions
+	rules := &rulelist.Store{Directory: mihomoPreparer.Layout.LocalRulesDir}
 	settingsService.OnChanged = func(callbackContext context.Context, restartRequired bool) error {
 		if restartRequired {
 			if _, err := lifecycle.RestartIfRunning(callbackContext); err != nil {
@@ -992,6 +1250,9 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		return err
 	}
 	proxySubscriptions.OnChanged = func(callbackContext context.Context) error {
+		if selectedProfileEngine(mihomoPreparer.Profiles) != state.EngineMihomo {
+			return nil
+		}
 		_, err := lifecycle.RestartIfRunning(callbackContext)
 		return err
 	}
@@ -1001,7 +1262,7 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	services.ProxySubscriptions = proxySubscriptions
 	services.RuleLists = RuleListService{Store: rules, Config: configService}
 	services.FakeIPWhitelist = &FakeIPWhitelistService{
-		Manager: preparer.FakeIP, Preparer: preparer, Lifecycle: lifecycle,
+		Manager: mihomoPreparer.FakeIP, Preparer: mihomoPreparer, Lifecycle: lifecycle,
 	}
 	services.Backups = BackupService{
 		Manager: DefaultBackupManager(root),
@@ -1015,10 +1276,10 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		StopCore:  lifecycle.Stop,
 		StartCore: lifecycle.Start,
 		LockExport: func(exportContext context.Context) (func() error, error) {
-			return lockBackupExport(exportContext, preparer.State)
+			return lockBackupExport(exportContext, mihomoPreparer.State)
 		},
 		LockImport: func(importContext context.Context) (func() error, error) {
-			return lockBackupImport(importContext, lifecycle, preparer.State, openWrtActivation.Locks)
+			return lockBackupImport(importContext, lifecycle, mihomoPreparer.State, openWrtActivation.Locks)
 		},
 		CanImport: func() bool {
 			return lifecycleAllowsBackupImport(lifecycle.Snapshot())
@@ -1026,30 +1287,45 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	}
 	var coreService *CoreService
 	if !options.NoCore {
-		coreService, err = NewCoreService(lifecycle, preparer, driver, CoreServiceOptions{
-			CoreName: state.EngineMihomo, UnsafeExternalDashboard: options.UnsafeExternalDashboard,
+		coreService, err = NewCoreService(lifecycle, enginePreparer, host, CoreServiceOptions{
+			CoreName: "core", UnsafeExternalDashboard: options.UnsafeExternalDashboard,
+			SelectedEngine: func() string { return selectedProfileEngine(mihomoPreparer.Profiles) },
 		})
 		if err != nil {
 			return nil, err
 		}
 		services.Core = coreService
 		services.Lifecycle = LifecycleService{Lifecycle: lifecycle}
-		updates, updateErr := NewMihomoUpdateService(ctx, root, &http.Client{Timeout: 90 * time.Second}, preparer, lifecycle, driver)
+		updateClient := &http.Client{Timeout: 90 * time.Second}
+		mihomoUpdates, updateErr := NewMihomoUpdateService(ctx, root, updateClient, mihomoPreparer, lifecycle, mihomoDriver)
 		if updateErr != nil {
 			_ = coreService.Close()
 			return nil, updateErr
 		}
+		singBoxUpdates, updateErr := NewSingBoxUpdateService(ctx, root, updateClient, singBoxPreparer, lifecycle)
+		if updateErr != nil {
+			_ = coreService.Close()
+			return nil, updateErr
+		}
+		updates := &MultiEngineUpdateService{
+			Mihomo: mihomoUpdates, SingBox: singBoxUpdates,
+			Selected: func() string { return selectedProfileEngine(mihomoPreparer.Profiles) },
+		}
 		services.CoreUpdates = updates
 		if options.UnsafeExternalDashboard {
-			dashboardManager, dashboardErr := NewExternalDashboardManager(root, &http.Client{Timeout: 90 * time.Second}, driver)
+			dashboardManager, dashboardErr := NewExternalDashboardManager(root, &http.Client{Timeout: 90 * time.Second}, mihomoDriver)
 			if dashboardErr != nil {
 				_ = coreService.Close()
 				return nil, dashboardErr
 			}
-			services.ExternalDashboard = dashboardManager
-			services.ExternalDashboardHTTP = dashboardManager
+			dashboard := mihomoExternalDashboard{
+				manager:  dashboardManager,
+				selected: func() string { return selectedProfileEngine(mihomoPreparer.Profiles) },
+			}
+			services.ExternalDashboard = dashboard
+			services.ExternalDashboardHTTP = dashboard
 		}
-		automaticUpdates = NewAutomaticCoreUpdates(preparer.State, updates, logger)
+		automaticUpdates = NewAutomaticCoreUpdates(mihomoPreparer.State, updates, logger)
 		configService.OnReload = func(callbackContext context.Context) (bool, error) {
 			if lifecycle.Snapshot().State != LifecycleRunning {
 				return false, nil
@@ -1084,16 +1360,145 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		stopAutomaticUpdates = cancelAutomaticUpdates
 		go automaticUpdates.Run(automaticUpdateContext)
 	}
+	hostOwned = false
 	return &serveRuntime{Handler: handler, Lifecycle: lifecycle, HandoffMarkerPending: handoffAdopted, Close: func() error {
 		stopMaintenance()
 		stopAutomaticUpdates()
 		stopProfileScheduler()
 		stopProxySubscriptionScheduler()
+		var coreErr error
 		if coreService != nil {
-			return coreService.Close()
+			coreErr = coreService.Close()
 		}
-		return nil
+		return errors.Join(coreErr, host.Close())
 	}}, nil
+}
+
+func singBoxControllerOrigins(publicOrigin string) []string {
+	origins := []string{"http://127.0.0.1"}
+	if origin := strings.TrimSpace(publicOrigin); origin != "" && origin != origins[0] {
+		origins = append(origins, origin)
+	}
+	return origins
+}
+
+func preparedMatchesProfile(layout state.Layout, prepared engine.PreparedCore, profile state.ActiveProfile) bool {
+	if prepared.Engine != profile.Engine {
+		return false
+	}
+	source := filepath.Clean(prepared.SourceConfigPath)
+	if profile.Engine == state.EngineMihomo && source == filepath.Clean(layout.MihomoConfig) {
+		return true
+	}
+	return source == filepath.Join(layout.ProfilesDir, state.ProfileConfigName(profile))
+}
+
+func preparedMatchesProfileRevision(layout state.Layout, profiles state.ProfileStore, prepared engine.PreparedCore, profile state.ActiveProfile, requiredRevision string) bool {
+	if !preparedMatchesProfile(layout, prepared, profile) {
+		return false
+	}
+	if requiredRevision != "" {
+		return prepared.SourceRevision == requiredRevision
+	}
+	if prepared.SourceRevision == "" {
+		// Legacy Mihomo handoff records predate revision identity. Keep the
+		// existing path check for that one migration case; all v2 records below
+		// must also match the current source bytes.
+		return profile.Engine == state.EngineMihomo
+	}
+	content, err := profiles.Get(profile)
+	return err == nil && contentRevision(content) == prepared.SourceRevision
+}
+
+func selectedProfile(profiles state.ProfileStore) (state.ActiveProfile, error) {
+	active, err := profiles.Current()
+	if err != nil {
+		return state.ActiveProfile{}, err
+	}
+	if active.Engine == "" {
+		active.Engine = state.EngineMihomo
+	}
+	return active, nil
+}
+
+func selectedProfileEngine(profiles state.ProfileStore) string {
+	active, err := profiles.Current()
+	if err == nil && active.Engine != "" {
+		return active.Engine
+	}
+	return state.EngineMihomo
+}
+
+type adoptableCore interface {
+	Adopt(context.Context) (engine.PreparedCore, engine.HealthStatus, error)
+}
+
+func shouldAttemptCoreAdoption(noCore bool, goos string) bool {
+	return !noCore && goos == "linux"
+}
+
+type adoptedGenerationLifecycle interface {
+	Adopt(engine.PreparedCore, engine.HealthStatus) error
+	RecoverAdopted(context.Context, engine.PreparedCore, engine.HealthStatus) error
+	DiscardAdopted(context.Context, engine.PreparedCore, engine.HealthStatus) error
+}
+
+// acceptAdoptedGeneration keeps the no-touch path exclusive to a verified
+// manager handoff. An unrequested crash must rebuild capture/DNS ownership from
+// the exact persisted generation before it can be reported as running, unless
+// start-stopped mode requires that surviving process to be cleaned up instead.
+func acceptAdoptedGeneration(
+	ctx context.Context,
+	lifecycle adoptedGenerationLifecycle,
+	prepared engine.PreparedCore,
+	health engine.HealthStatus,
+	verifiedHandoff bool,
+	matchesSelection bool,
+	startStopped bool,
+) (bool, error) {
+	if !matchesSelection || (!verifiedHandoff && startStopped) {
+		return false, lifecycle.DiscardAdopted(ctx, prepared, health)
+	}
+	if verifiedHandoff {
+		err := lifecycle.Adopt(prepared, health)
+		return err == nil, err
+	}
+	return false, lifecycle.RecoverAdopted(ctx, prepared, health)
+}
+
+func adoptSelectedEngine(
+	ctx context.Context,
+	selected string,
+	backends map[string]adoptableCore,
+	logger *slog.Logger,
+) (engine.PreparedCore, engine.HealthStatus, error) {
+	order := []string{selected}
+	for _, candidate := range []string{state.EngineMihomo, state.EngineSingBox} {
+		if candidate != selected {
+			order = append(order, candidate)
+		}
+	}
+	var failures []error
+	for _, engineName := range order {
+		backend := backends[engineName]
+		if backend == nil {
+			continue
+		}
+		prepared, health, err := backend.Adopt(ctx)
+		if err == nil {
+			return prepared, health, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, engine.ErrProcessStateNotOwned) {
+			failures = append(failures, fmt.Errorf("%s adoption: %w", engineName, err))
+			if logger != nil {
+				logger.Debug("core adoption candidate rejected", "engine", engineName, "error", err)
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return engine.PreparedCore{}, engine.HealthStatus{}, errors.Join(failures...)
+	}
+	return engine.PreparedCore{}, engine.HealthStatus{}, os.ErrNotExist
 }
 
 func lockBackupExport(ctx context.Context, store state.Store) (func() error, error) {
@@ -1190,10 +1595,22 @@ func lockBackupImport(ctx context.Context, lifecycle *Lifecycle, store, openWrtL
 }
 
 func defaultOneShotRuntime(root, lockRoot string, runner openwrt.Runner) (*oneShotRuntime, error) {
-	driver := engine.NewMihomoDriver(engine.MihomoOptions{})
-	preparer, err := NewActiveMihomoPreparer(root, driver)
+	mihomoDriver := engine.NewMihomoDriver(engine.MihomoOptions{})
+	singBoxDriver := engine.NewSingBoxDriver(engine.SingBoxOptions{})
+	mihomoPreparer, err := NewActiveMihomoPreparer(root, mihomoDriver)
 	if err != nil {
 		return nil, err
+	}
+	singBoxPreparer, err := NewActiveSingBoxPreparer(root, singBoxDriver)
+	if err != nil {
+		return nil, err
+	}
+	preparer := &EnginePreparer{
+		Profiles: mihomoPreparer.Profiles,
+		Preparers: map[string]ExplicitProfilePreparer{
+			state.EngineMihomo: mihomoPreparer, state.EngineSingBox: singBoxPreparer,
+		},
+		Legacy: mihomoPreparer,
 	}
 	activation, err := newOpenWrtActivation(root, lockRoot, runner)
 	if err != nil {
@@ -1202,8 +1619,19 @@ func defaultOneShotRuntime(root, lockRoot string, runner openwrt.Runner) (*oneSh
 	return &oneShotRuntime{Preparer: preparer, Activation: activation}, nil
 }
 
-func mihomoPreparedReady(ctx context.Context, prepared engine.PreparedCore) error {
-	controller, err := engine.NewMihomoController(prepared.Controller, nil)
+func preparedCoreReady(ctx context.Context, prepared engine.PreparedCore) error {
+	var controller interface {
+		Version(context.Context) (string, error)
+	}
+	var err error
+	switch prepared.Engine {
+	case state.EngineMihomo, "":
+		controller, err = engine.NewMihomoController(prepared.Controller, nil)
+	case state.EngineSingBox:
+		controller, err = engine.NewSingBoxController(prepared.Controller, nil)
+	default:
+		err = fmt.Errorf("unsupported prepared engine %q", prepared.Engine)
+	}
 	if err != nil {
 		return err
 	}
@@ -1269,11 +1697,12 @@ type DoctorCheck struct {
 }
 
 type DoctorReport struct {
-	Version   string         `json:"version"`
-	Root      string         `json:"root"`
-	CheckedAt time.Time      `json:"checkedAt"`
-	Platform  PlatformReport `json:"platform"`
-	Checks    []DoctorCheck  `json:"checks"`
+	Version        string         `json:"version"`
+	Root           string         `json:"root"`
+	SelectedEngine string         `json:"selectedEngine"`
+	CheckedAt      time.Time      `json:"checkedAt"`
+	Platform       PlatformReport `json:"platform"`
+	Checks         []DoctorCheck  `json:"checks"`
 }
 
 func (report *DoctorReport) add(name string, ok bool, message string) {

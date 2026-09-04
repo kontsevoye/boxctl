@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react'
-import { APIError, request } from '../api'
+import { APIError, request, requestWithFallback } from '../api'
 import { useApp } from '../app-context'
 import { canPerform, canShowPage } from '../capabilities'
 import { ChoiceField } from '../components/ChoiceField'
 import { ErrorPanel, Loading, PageHeader } from '../components/Common'
 import { BoxctlVersion } from '../components/BoxctlVersion'
 import { Toast } from '../components/Toast'
-import { useQuery } from '../hooks'
+import { useFallbackQuery, useQuery } from '../hooks'
 import { useI18n } from '../i18n'
+import { legacyEngine, selectedEngine } from '../engines'
 import { applyTheme } from '../theme'
-import type { Capabilities, CoreUpdateResult, CoreUpdateStatus, ExternalDashboardResult, ExternalDashboardStatus, Settings } from '../types'
+import type { Capabilities, CoreUpdateResult, CoreUpdateStatus, EngineInfo, ExternalDashboardResult, ExternalDashboardStatus, Settings } from '../types'
 import { useExternalDashboard } from '../use-external-dashboard'
 import { BackupsPage } from './BackupsPage'
 
@@ -20,18 +21,19 @@ export type PortListError = 'invalid' | 'too_many'
 const portListFields: PortListField[] = ['bypassTCPPorts', 'bypassUDPPorts', 'proxyOnlyTCPPorts', 'proxyOnlyUDPPorts']
 
 export function SettingsPage() {
-	const { capabilities, refreshCapabilities } = useApp()
+  const { capabilities, engines: catalog, refreshCapabilities } = useApp()
+  const engines = catalog && catalog.length > 0 ? catalog : [legacyEngine(capabilities)]
+  const activeEngine = selectedEngine(engines)
   const { setLocale, t } = useI18n()
   const query = useQuery<Settings>('/settings')
-  const coreUpdate = useQuery<CoreUpdateStatus>('/core/update')
-  const externalDashboardAvailable = externalDashboardEnabled(capabilities)
+  const externalDashboardAvailable = externalDashboardEnabled(capabilities, activeEngine)
+  const engineCaptureModes = activeEngine?.supportedCaptureModes ?? []
   const externalDashboard = useQuery<ExternalDashboardStatus>('/external-dashboard?checkUpdates=true', externalDashboardAvailable)
   const externalDashboardLaunch = useExternalDashboard(() => externalDashboard.reload())
   const [form, setForm] = useState<Settings>()
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState<APIError>()
-	const [updateBusy, setUpdateBusy] = useState(false)
   const [externalDashboardBusy, setExternalDashboardBusy] = useState(false)
   const [listText, setListText] = useState<Record<ListField, string>>(emptyListText)
   const [portErrors, setPortErrors] = useState<Partial<Record<PortListField, PortListError>>>({})
@@ -91,23 +93,6 @@ export function SettingsPage() {
       setBusy(false)
     }
   }
-	const installCoreUpdate = async () => {
-		const cleanInstall = isCleanCoreInstall(coreUpdate.data)
-		if (!confirm(t(cleanInstall ? 'confirmCoreInstall' : 'confirmCoreUpdate'))) return
-		setUpdateBusy(true)
-		setError(undefined)
-		setMessage('')
-		try {
-			const result = await request<CoreUpdateResult>('/core/update', { method: 'POST', body: '{}' })
-			setMessage(`${t(cleanInstall ? 'coreInstalled' : 'coreUpdated')}: ${result.currentVersion}`)
-			coreUpdate.reload()
-			await refreshCapabilities()
-		} catch (reason) {
-			setError(reason instanceof APIError ? reason : new APIError(0, 'network_error', String(reason)))
-		} finally {
-			setUpdateBusy(false)
-		}
-	}
   const manageExternalDashboard = async () => {
     const installed = externalDashboard.data?.installed ?? false
     if (!installed && !confirm(t('confirmExternalDashboardTrust'))) return
@@ -142,18 +127,13 @@ export function SettingsPage() {
         <ChoiceField label={t('logLevel')} value={form.logLevel} options={['debug', 'info', 'warn', 'error'].map((value) => ({ value, label: value }))} onChange={(value) => update('logLevel', value)} />
         <ChoiceField label={t('updateChannel')} value={form.updateChannel} options={['stable', 'alpha'].map((value) => ({ value, label: value }))} onChange={(value) => update('updateChannel', value)} />
 				<ChoiceField label={t('operatingMode')} value={form.operatingMode ?? 'gateway'} options={[{ value: 'gateway', label: t('gatewayMode') }, { value: 'server', label: t('serverMode') }]} onChange={(value) => update('operatingMode', value as Settings['operatingMode'])} hint={form.operatingMode === 'server' ? t('serverModeHint') : t('gatewayModeHint')} />
-        <ChoiceField label={t('captureMode')} value={form.captureMode} options={(form.availableCaptureModes ?? [form.captureMode]).map((value) => ({ value, label: value }))} onChange={(value) => update('captureMode', value)} />
+        <ChoiceField label={t('captureMode')} value={form.captureMode} options={(engineCaptureModes.length > 0 ? engineCaptureModes : (form.availableCaptureModes ?? [form.captureMode])).map((value) => ({ value, label: value }))} onChange={(value) => update('captureMode', value)} />
       </div>
       <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.startOnBoot} onChange={(event) => update('startOnBoot', event.currentTarget.checked)} /><span>{t('startOnBoot')}</span></label>
 		<label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoUpdate ?? false} onChange={(event) => update('autoUpdate', event.currentTarget.checked)} /><span>{t('autoUpdate')}</span></label>
 		<div className="settings-section">
-			<h2>{t('coreUpdate')}</h2>
-			{coreUpdate.loading && !coreUpdate.data && <Loading />}
-			{coreUpdate.error && <ErrorPanel error={coreUpdate.error} onRetry={coreUpdate.reload} />}
-			{coreUpdate.data && <div className="title-row">
-				<div><strong>{coreUpdate.data.currentVersion ?? '—'}</strong><small>{t('latestVersion')}: {coreUpdate.data.latestVersion ?? '—'} ({coreUpdate.data.channel})</small></div>
-				<button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={updateBusy || !coreUpdate.data.updateAvailable || !canPerform(capabilities, 'updateCore')} onClick={installCoreUpdate}>{updateBusy ? t('updatingCore') : t(isCleanCoreInstall(coreUpdate.data) ? 'installMihomo' : 'installCoreUpdate')}</button>
-			</div>}
+			<h2>{t('engineUpdates')}</h2>
+        {engines.filter((engine) => engine.management.updates).map((engine) => <EngineUpdatePanel key={engine.id} engine={engine} capabilities={capabilities} refreshCapabilities={refreshCapabilities} onMessage={setMessage} onError={setError} />)}
 		</div>
       <div className="settings-section">
 			<div className="title-row"><div><h2>{t('advancedRouting')}</h2><small>{t('interfaceCatalogHint')}</small></div><button className="du-btn du-btn-ghost du-btn-sm" type="button" onClick={query.reload}>{t('rescan')}</button></div>
@@ -167,6 +147,10 @@ export function SettingsPage() {
           <label>{t('includedInterfaces')}<textarea className="du-textarea du-textarea-sm" rows={2} value={listText.includedInterfaces} onInput={(event) => updateList('includedInterfaces', event.currentTarget.value)} /><small>{t('commaListHint')}</small></label>
           <label>{t('excludedInterfaces')}<textarea className="du-textarea du-textarea-sm" rows={2} value={listText.excludedInterfaces} onInput={(event) => updateList('excludedInterfaces', event.currentTarget.value)} /><small>{t('commaListHint')}</small></label>
           <ChoiceField label={t('tunStack')} value={form.tunStack ?? 'system'} options={['system', 'gvisor', 'mixed'].map((value) => ({ value, label: value }))} onChange={(value) => update('tunStack', value)} />
+          {activeEngine?.id === 'sing-box' && <>
+            <label>{t('tunAddress')}<input className="du-input du-input-sm" value={form.tunAddress ?? ''} onInput={(event) => update('tunAddress', event.currentTarget.value)} placeholder="172.19.0.1/30" /><small>{t('tunAddressHint')}</small></label>
+			<label>{t('tunMTU')}<input className="du-input du-input-sm" type="number" min={576} max={9000} value={form.tunMTU ?? 1500} onInput={(event) => update('tunMTU', event.currentTarget.valueAsNumber)} required /></label>
+          </>}
           <label>{t('reservedNetworks')}<textarea className="du-textarea du-textarea-sm" rows={2} value={listText.reservedNetworks} onInput={(event) => updateList('reservedNetworks', event.currentTarget.value)} /><small>{t('commaListHint')}</small></label>
           <label>{t('bypassSources')}<textarea className="du-textarea du-textarea-sm" rows={2} value={listText.bypassSources} onInput={(event) => updateList('bypassSources', event.currentTarget.value)} /><small>{t('commaListHint')}</small></label>
           <label>{t('bypassTCPPorts')}<textarea className="du-textarea du-textarea-sm" rows={2} value={listText.bypassTCPPorts} aria-invalid={portErrors.bypassTCPPorts ? true : undefined} aria-describedby="bypassTCPPorts-hint" onInput={(event) => updateList('bypassTCPPorts', event.currentTarget.value)} /><small id="bypassTCPPorts-hint" className={portErrors.bypassTCPPorts ? 'field-error' : undefined} role={portErrors.bypassTCPPorts ? 'alert' : undefined}>{portErrors.bypassTCPPorts ? t(portErrors.bypassTCPPorts === 'too_many' ? 'portListTooLarge' : 'invalidPortList') : t('commaListHint')}</small></label>
@@ -179,22 +163,24 @@ export function SettingsPage() {
           <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoDetectLAN ?? true} onChange={(event) => update('autoDetectLAN', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoDetectLAN')}</span><small>{t('autoDetectLANHint')}</small></span></label>
           <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.interceptRouterOutput ?? true} onChange={(event) => update('interceptRouterOutput', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('interceptRouterOutput')}</span><small>{t('interceptRouterOutputHint')}</small></span></label>
           <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.rejectQUIC ?? false} onChange={(event) => update('rejectQUIC', event.currentTarget.checked)} /><span>{t('rejectQUIC')}</span></label>
-          <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoFakeIPWhitelist ?? false} onChange={(event) => update('autoFakeIPWhitelist', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoFakeIPWhitelist')}</span><small>{t('autoFakeIPWhitelistHint')}</small></span></label>
-			<label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoFakeIPIncludeExternalIPProviders ?? false} onChange={(event) => update('autoFakeIPIncludeExternalIPProviders', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoFakeIPIncludeExternalIPProviders')}</span><small>{t('autoFakeIPIncludeExternalIPProvidersHint')}</small></span></label>
-			<label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.useTmpfsRules ?? false} onChange={(event) => update('useTmpfsRules', event.currentTarget.checked)} /><span>{t('useTmpfsRules')}</span></label>
-			<label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.enableHWID ?? false} onChange={(event) => update('enableHWID', event.currentTarget.checked)} /><span>{t('enableHWID')}</span></label>
-        </div>
-      </div>
-      <div className="settings-section">
-        <h2>{t('periodicMaintenance')}</h2>
-        <div className="toggle-grid">
-          <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoRefreshProxyIPs ?? true} onChange={(event) => update('autoRefreshProxyIPs', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoRefreshProxyIPs')}</span><small>{t('autoRefreshProxyIPsHint')}</small></span></label>
-          <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoRefreshFakeIP ?? true} onChange={(event) => update('autoRefreshFakeIP', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoRefreshFakeIP')}</span><small>{t('autoRefreshFakeIPHint')}</small></span></label>
-        </div>
-        <div className="form-grid">
-          <label>{t('maintenanceInterval')}<input className="du-input du-input-sm" type="number" min={5} max={1440} value={form.maintenanceIntervalMinutes ?? 30} onInput={(event) => update('maintenanceIntervalMinutes', event.currentTarget.valueAsNumber)} /><small>{t('maintenanceIntervalHint')}</small></label>
-        </div>
-      </div>
+		  {activeEngine?.id !== 'sing-box' && <>
+			  <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoFakeIPWhitelist ?? false} onChange={(event) => update('autoFakeIPWhitelist', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoFakeIPWhitelist')}</span><small>{t('autoFakeIPWhitelistHint')}</small></span></label>
+			  <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoFakeIPIncludeExternalIPProviders ?? false} onChange={(event) => update('autoFakeIPIncludeExternalIPProviders', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoFakeIPIncludeExternalIPProviders')}</span><small>{t('autoFakeIPIncludeExternalIPProvidersHint')}</small></span></label>
+			  <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.useTmpfsRules ?? false} onChange={(event) => update('useTmpfsRules', event.currentTarget.checked)} /><span>{t('useTmpfsRules')}</span></label>
+			  <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.enableHWID ?? false} onChange={(event) => update('enableHWID', event.currentTarget.checked)} /><span>{t('enableHWID')}</span></label>
+		  </>}
+		</div>
+	  </div>
+	  {activeEngine?.id !== 'sing-box' && <div className="settings-section">
+		<h2>{t('periodicMaintenance')}</h2>
+		<div className="toggle-grid">
+		  <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoRefreshProxyIPs ?? true} onChange={(event) => update('autoRefreshProxyIPs', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoRefreshProxyIPs')}</span><small>{t('autoRefreshProxyIPsHint')}</small></span></label>
+		  <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoRefreshFakeIP ?? true} onChange={(event) => update('autoRefreshFakeIP', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoRefreshFakeIP')}</span><small>{t('autoRefreshFakeIPHint')}</small></span></label>
+		</div>
+		<div className="form-grid">
+		  <label>{t('maintenanceInterval')}<input className="du-input du-input-sm" type="number" min={5} max={1440} value={form.maintenanceIntervalMinutes ?? 30} onInput={(event) => update('maintenanceIntervalMinutes', event.currentTarget.valueAsNumber)} /><small>{t('maintenanceIntervalHint')}</small></label>
+		</div>
+	  </div>}
 		<div className="settings-section">
 			<div className="title-row"><div><h2>{t('integratedDashboard')}</h2><small>{t('integratedDashboardHint')}</small></div><a className="du-btn du-btn-outline du-btn-sm" href="/proxies">{t('openDashboard')}</a></div>
 		</div>
@@ -239,6 +225,45 @@ export function SettingsPage() {
   </>
 }
 
+function EngineUpdatePanel({ engine, capabilities, refreshCapabilities, onMessage, onError }: {
+  engine: EngineInfo
+  capabilities: Capabilities
+  refreshCapabilities: () => Promise<void>
+  onMessage: (message: string) => void
+  onError: (error?: APIError) => void
+}) {
+  const { t } = useI18n()
+  const path = `/engines/${encodeURIComponent(engine.id)}/update`
+  const fallbackPath = engine.id === 'mihomo' ? '/core/update' : undefined
+  const update = useFallbackQuery<CoreUpdateStatus>(path, fallbackPath)
+  const [busy, setBusy] = useState(false)
+  const install = async () => {
+    const cleanInstall = isCleanCoreInstall(update.data)
+    if (!confirm(t(cleanInstall ? 'confirmEngineInstall' : 'confirmEngineUpdate'))) return
+    setBusy(true)
+    onError(undefined)
+    onMessage('')
+    try {
+      const result = await requestWithFallback<CoreUpdateResult>(path, fallbackPath, { method: 'POST', body: '{}' })
+      onMessage(`${t(cleanInstall ? 'engineInstalled' : 'engineUpdated')}: ${engine.displayName} ${result.currentVersion}`)
+      update.reload()
+      await refreshCapabilities()
+    } catch (reason) {
+      onError(reason instanceof APIError ? reason : new APIError(0, 'network_error', String(reason)))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <div className="engine-update-row">
+    <div className="title-row">
+      <div><strong>{engine.displayName}</strong><small>{update.data?.currentVersion ?? engine.version ?? '—'} · {t('latestVersion')}: {update.data?.latestVersion ?? '—'}{update.data?.channel ? ` (${update.data.channel})` : ''}</small></div>
+      {update.data && <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={busy || !update.data.updateAvailable || !(canPerform(capabilities, 'updateEngine') || canPerform(capabilities, 'updateCore'))} onClick={() => void install()}>{busy ? t('updatingCore') : t(isCleanCoreInstall(update.data) ? 'installEngine' : 'installCoreUpdate')}</button>}
+    </div>
+    {update.loading && !update.data && <Loading />}
+    {update.error && <ErrorPanel error={update.error} onRetry={update.reload} />}
+  </div>
+}
+
 export function isCleanCoreInstall(status?: CoreUpdateStatus): boolean {
 	return status?.currentVersion?.trim() === '' || status?.currentVersion === undefined
 }
@@ -247,8 +272,9 @@ export function canManageExternalDashboard(status?: ExternalDashboardStatus): bo
   return status !== undefined && (!status.installed || status.updateAvailable)
 }
 
-export function externalDashboardEnabled(capabilities: Capabilities): boolean {
-  return capabilities.features?.externalDashboard === true
+export function externalDashboardEnabled(capabilities: Capabilities, engine?: EngineInfo): boolean {
+  return (engine?.id ?? capabilities.coreName) === 'mihomo'
+    && (engine ? engine.management.externalDashboard : capabilities.features?.externalDashboard === true)
 }
 
 export function settingsUpdatePayload(form: Settings, listText: Record<ListField, string>) {
@@ -269,6 +295,8 @@ export function settingsUpdatePayload(form: Settings, listText: Record<ListField
     autoDetectLAN: form.autoDetectLAN ?? true,
     interceptRouterOutput: form.interceptRouterOutput ?? true,
     tunStack: form.tunStack,
+    tunAddress: form.tunAddress,
+    tunMTU: form.tunMTU,
     rejectQUIC: form.rejectQUIC ?? false,
     autoFakeIPWhitelist: form.autoFakeIPWhitelist ?? false,
 		autoFakeIPIncludeExternalIPProviders: form.autoFakeIPIncludeExternalIPProviders ?? false,

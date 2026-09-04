@@ -37,7 +37,39 @@
   margin-bottom: 1rem;
 }
 
+.configuration-engine-filter {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  font-size: .8rem;
+}
+
+.configuration-engine-filter .du-select {
+  min-width: 10rem;
+}
+
+.config-profile-select {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  margin-bottom: 1rem;
+}
+
+.config-profile-select .du-select {
+  min-width: min(22rem, 100%);
+}
+
 @media (max-width: 560px) {
+  .configuration-engine-filter {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .configuration-engine-filter .du-select {
+    min-width: 0;
+    max-width: 70%;
+  }
+
   .configuration-tabs {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

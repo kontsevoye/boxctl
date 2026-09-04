@@ -15,7 +15,8 @@ import { RulesPage } from './pages/RulesPage'
 import { RuleListsPage } from './pages/RuleListsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { StatusPage } from './pages/StatusPage'
-import type { AdminSetupStatus, Capabilities, Session } from './types'
+import { legacyEngine, normalizeEngines } from './engines'
+import type { AdminSetupStatus, Capabilities, EngineInfo, Session } from './types'
 
 const routeCapabilities: Partial<Record<Route, string | string[]>> = {
   '/': 'status',
@@ -38,12 +39,21 @@ export function App() {
   const [checking, setChecking] = useState(true)
   const [adminSetup, setAdminSetup] = useState<AdminSetupStatus>()
   const [capabilities, setCapabilities] = useState<Capabilities>(minimalCapabilities)
+  const [engines, setEngines] = useState<EngineInfo[]>([])
 
   const refreshCapabilities = useCallback(async () => {
+    let nextCapabilities = minimalCapabilities
     try {
-      setCapabilities(await request<Capabilities>('/core/capabilities'))
+      nextCapabilities = await request<Capabilities>('/core/capabilities')
     } catch {
-      setCapabilities(minimalCapabilities)
+      // Keep controller pages usable while the selected engine is unavailable.
+    }
+    setCapabilities(nextCapabilities)
+    try {
+      const catalog = normalizeEngines(await request<unknown>('/engines'))
+      setEngines(catalog.length > 0 ? catalog : [legacyEngine(nextCapabilities)])
+    } catch {
+      setEngines([legacyEngine(nextCapabilities)])
     }
   }, [])
 
@@ -93,7 +103,7 @@ export function App() {
     void refreshCapabilities()
   }, [refreshCapabilities])
 
-  const appState = useMemo(() => session ? { session, capabilities, refreshCapabilities } : undefined, [session, capabilities, refreshCapabilities])
+  const appState = useMemo(() => session ? { session, capabilities, engines, refreshCapabilities } : undefined, [session, capabilities, engines, refreshCapabilities])
   if (checking) return <div className="boot-screen"><Loading /></div>
   if (!session && adminSetup?.required) return <AdminSetup onCompleted={() => {
     setAdminSetup({ ...adminSetup, required: false })

@@ -283,6 +283,109 @@ func TestServeStartStoppedBuildsManagementAndMonitorsWithoutInitialStart(t *test
 	}
 }
 
+type adoptionStub struct {
+	prepared engine.PreparedCore
+	health   engine.HealthStatus
+	err      error
+	calls    int
+}
+
+func (stub *adoptionStub) Adopt(context.Context) (engine.PreparedCore, engine.HealthStatus, error) {
+	stub.calls++
+	return stub.prepared, stub.health, stub.err
+}
+
+func TestAdoptSelectedEngineTreatsStaleOwnerAndOppositeStateAsAbsent(t *testing.T) {
+	staleOwner := &adoptionStub{err: os.ErrNotExist}
+	opposite := &adoptionStub{err: engine.ErrProcessStateNotOwned}
+
+	_, _, err := adoptSelectedEngine(context.Background(), state.EngineMihomo, map[string]adoptableCore{
+		state.EngineMihomo:  staleOwner,
+		state.EngineSingBox: opposite,
+	}, nil)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("adoptSelectedEngine() error = %v, want not found", err)
+	}
+	if staleOwner.calls != 1 || opposite.calls != 1 {
+		t.Fatalf("adoption calls = owner:%d opposite:%d, want 1 each", staleOwner.calls, opposite.calls)
+	}
+}
+
+func TestAdoptSelectedEnginePreservesOwnerIdentityFailure(t *testing.T) {
+	identityErr := errors.New("persisted process identity changed")
+	owner := &adoptionStub{err: identityErr}
+	opposite := &adoptionStub{err: engine.ErrProcessStateNotOwned}
+
+	_, _, err := adoptSelectedEngine(context.Background(), state.EngineMihomo, map[string]adoptableCore{
+		state.EngineMihomo:  owner,
+		state.EngineSingBox: opposite,
+	}, nil)
+	if !errors.Is(err, identityErr) {
+		t.Fatalf("adoptSelectedEngine() error = %v, want identity failure", err)
+	}
+}
+
+type adoptedGenerationLifecycleStub struct{ calls []string }
+
+func (stub *adoptedGenerationLifecycleStub) Adopt(engine.PreparedCore, engine.HealthStatus) error {
+	stub.calls = append(stub.calls, "adopt")
+	return nil
+}
+
+func (stub *adoptedGenerationLifecycleStub) RecoverAdopted(context.Context, engine.PreparedCore, engine.HealthStatus) error {
+	stub.calls = append(stub.calls, "recover")
+	return nil
+}
+
+func (stub *adoptedGenerationLifecycleStub) DiscardAdopted(context.Context, engine.PreparedCore, engine.HealthStatus) error {
+	stub.calls = append(stub.calls, "discard")
+	return nil
+}
+
+func TestShouldAttemptCoreAdoptionIncludesStartStoppedStartup(t *testing.T) {
+	if !shouldAttemptCoreAdoption(false, "linux") {
+		t.Fatal("Linux startup skipped persistent core adoption")
+	}
+	if shouldAttemptCoreAdoption(true, "linux") {
+		t.Fatal("no-core mode attempted persistent core adoption")
+	}
+	if shouldAttemptCoreAdoption(false, "darwin") {
+		t.Fatal("unsupported platform attempted persistent core adoption")
+	}
+}
+
+func TestAcceptAdoptedGenerationUsesBlindAdoptOnlyForVerifiedHandoff(t *testing.T) {
+	tests := []struct {
+		name             string
+		verifiedHandoff  bool
+		matchesSelection bool
+		startStopped     bool
+		wantCall         string
+		wantPreserved    bool
+	}{
+		{name: "verified handoff", verifiedHandoff: true, matchesSelection: true, wantCall: "adopt", wantPreserved: true},
+		{name: "manager crash", matchesSelection: true, wantCall: "recover"},
+		{name: "manager crash in start-stopped mode", matchesSelection: true, startStopped: true, wantCall: "discard"},
+		{name: "verified handoff overrides start-stopped mode", verifiedHandoff: true, matchesSelection: true, startStopped: true, wantCall: "adopt", wantPreserved: true},
+		{name: "stale generation", verifiedHandoff: true, wantCall: "discard"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stub := &adoptedGenerationLifecycleStub{}
+			preserved, err := acceptAdoptedGeneration(
+				context.Background(), stub, engine.PreparedCore{Engine: state.EngineMihomo},
+				engine.HealthStatus{Running: true, PID: 42}, test.verifiedHandoff, test.matchesSelection, test.startStopped,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(stub.calls, []string{test.wantCall}) || preserved != test.wantPreserved {
+				t.Fatalf("calls = %v, preserved = %t; want [%s], %t", stub.calls, preserved, test.wantCall, test.wantPreserved)
+			}
+		})
+	}
+}
+
 func TestServeCancelsActiveRequestBeforeLifecycleStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	serverConn, clientConn := net.Pipe()
@@ -895,6 +998,9 @@ func TestDoctorJSONIsReadOnlyAndReturnsFailedStatus(t *testing.T) {
 	if report.Root != root || report.Platform.Supported != true {
 		t.Fatalf("doctor report = %#v", report)
 	}
+	if report.SelectedEngine != state.EngineMihomo {
+		t.Fatalf("legacy selected engine = %q", report.SelectedEngine)
+	}
 }
 
 func TestDoctorReportsMissingIPFull(t *testing.T) {
@@ -922,6 +1028,127 @@ func TestDoctorReportsMissingIPFull(t *testing.T) {
 		}
 	}
 	t.Fatalf("ip-full check missing from %#v", report.Checks)
+}
+
+func TestDoctorValidatesOnlySelectedSingBoxEngine(t *testing.T) {
+	var output bytes.Buffer
+	actions := newIsolatedActions(t, &output)
+	root := t.TempDir()
+	profile := state.ActiveProfile{Name: "travel", Engine: state.EngineSingBox}
+	writeDoctorSingBoxFixture(t, root, profile, "1.14.7")
+
+	err := actions.Doctor(context.Background(), cli.DoctorOptions{Root: root, JSON: true})
+	if err != nil {
+		t.Fatalf("Doctor() error = %v, output=%s", err, output.String())
+	}
+	var report DoctorReport
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.SelectedEngine != state.EngineSingBox {
+		t.Fatalf("selected engine = %q", report.SelectedEngine)
+	}
+	wantOK := map[string]bool{"sing-box-binary": false, "sing-box-version": false, "sing-box-config": false, "config-native": false}
+	for _, check := range report.Checks {
+		if strings.HasPrefix(check.Name, "mihomo-") {
+			t.Fatalf("doctor required unselected Mihomo: %+v", check)
+		}
+		if _, wanted := wantOK[check.Name]; wanted {
+			if !check.OK {
+				t.Fatalf("doctor check failed: %+v", check)
+			}
+			wantOK[check.Name] = true
+		}
+	}
+	for name, found := range wantOK {
+		if !found {
+			t.Fatalf("doctor check %s is missing: %+v", name, report.Checks)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(root, singBoxControllerStatePath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only doctor created controller state: %v", err)
+	}
+}
+
+func TestDoctorRejectsIncompatibleSelectedSingBox(t *testing.T) {
+	var output bytes.Buffer
+	actions := newIsolatedActions(t, &output)
+	root := t.TempDir()
+	writeDoctorSingBoxFixture(t, root, state.ActiveProfile{Name: "travel", Engine: state.EngineSingBox}, "1.15.0")
+
+	err := actions.Doctor(context.Background(), cli.DoctorOptions{Root: root, JSON: true})
+	var doctorErr *DoctorError
+	if !errors.As(err, &doctorErr) {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	var report DoctorReport
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range report.Checks {
+		if check.Name == "sing-box-version" {
+			if check.OK || !strings.Contains(check.Message, "require >=1.14.0,<1.15.0") {
+				t.Fatalf("version check = %+v", check)
+			}
+			return
+		}
+	}
+	t.Fatal("sing-box version check is missing")
+}
+
+func TestDoctorRejectsInvalidSelectedSingBoxJSONWithoutEchoingIt(t *testing.T) {
+	var output bytes.Buffer
+	actions := newIsolatedActions(t, &output)
+	root := t.TempDir()
+	profile := state.ActiveProfile{Name: "travel", Engine: state.EngineSingBox}
+	writeDoctorSingBoxFixture(t, root, profile, "1.14.0")
+	if err := os.WriteFile(filepath.Join(root, "configs", state.ProfileConfigName(profile)), []byte("{\"private_secret\":"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := actions.Doctor(context.Background(), cli.DoctorOptions{Root: root, JSON: true})
+	var doctorErr *DoctorError
+	if !errors.As(err, &doctorErr) {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	var report DoctorReport
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range report.Checks {
+		if check.Name == "config-native" {
+			if check.OK || check.Message != "sing-box rejected the selected native JSON configuration" || strings.Contains(check.Message, "private_secret") {
+				t.Fatalf("native config check = %+v", check)
+			}
+			return
+		}
+	}
+	t.Fatal("native sing-box config check is missing")
+}
+
+func writeDoctorSingBoxFixture(t *testing.T, root string, profile state.ActiveProfile, version string) {
+	t.Helper()
+	for _, directory := range []string{filepath.Join(root, ".boxctl"), filepath.Join(root, "configs"), filepath.Join(root, "engines", state.EngineSingBox)} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profileData, err := state.MarshalActiveProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".boxctl", "active-profile"), profileData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("{\"dns\":{\"servers\":[{\"type\":\"udp\",\"tag\":\"upstream\",\"server\":\"1.1.1.1\"}],\"final\":\"upstream\"},\"outbounds\":[{\"type\":\"direct\",\"tag\":\"direct\"}],\"route\":{\"final\":\"direct\"}}\n")
+	if err := os.WriteFile(filepath.Join(root, "configs", state.ProfileConfigName(profile)), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "engines", state.EngineSingBox, state.EngineSingBox)
+	script := "#!/bin/sh\ncase \"$1\" in\nversion) echo 'sing-box version " + version + "' ;;\nmerge) cp \"$6\" \"$2\" ;;\ncheck) exit 0 ;;\n*) exit 1 ;;\nesac\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSetPasswordAndValidationUseInjectedFilesystemBoundaries(t *testing.T) {

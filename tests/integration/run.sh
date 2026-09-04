@@ -13,17 +13,20 @@ sha256_file() {
 }
 
 manager="${repo_root}/dist/boxctl-linux-arm64"
-core="${script_dir}/.private/mihomo-linux-arm64"
+mihomo="${script_dir}/.private/mihomo-linux-arm64"
+sing_box="${script_dir}/.private/sing-box-linux-arm64"
 image=
 output=
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--manager) [ "$#" -ge 2 ] || die '--manager needs a file'; manager=$2; shift 2 ;;
-		--core) [ "$#" -ge 2 ] || die '--core needs a file'; core=$2; shift 2 ;;
+		--core|--mihomo) [ "$#" -ge 2 ] || die "$1 needs a file"; mihomo=$2; shift 2 ;;
+		--sing-box) [ "$#" -ge 2 ] || die '--sing-box needs a file'; sing_box=$2; shift 2 ;;
 		--image) [ "$#" -ge 2 ] || die '--image needs a file'; image=$2; shift 2 ;;
 		--output) [ "$#" -ge 2 ] || die '--output needs a directory'; output=$2; shift 2 ;;
 		-h|--help)
-			printf 'usage: %s [--manager FILE] [--core FILE] [--image FILE] [--output DIR]\n' "$0"
+			printf 'usage: %s [--manager FILE] [--mihomo FILE] [--sing-box FILE] [--image FILE] [--output DIR]\n' "$0"
+			printf '       --core FILE is retained as an alias for --mihomo FILE\n'
 			exit 0
 			;;
 		*) die "unknown argument: $1" ;;
@@ -32,7 +35,8 @@ done
 
 for command_name in qemu-system-aarch64 expect nc python3; do require_command "$command_name"; done
 [ -f "$manager" ] && [ -x "$manager" ] && [ ! -L "$manager" ] || die "manager is missing or unsafe: $manager"
-[ -f "$core" ] && [ -x "$core" ] && [ ! -L "$core" ] || die "Mihomo is missing or unsafe: $core"
+[ -f "$mihomo" ] && [ -x "$mihomo" ] && [ ! -L "$mihomo" ] || die "Mihomo is missing or unsafe: $mihomo"
+[ -f "$sing_box" ] && [ -x "$sing_box" ] && [ ! -L "$sing_box" ] || die "sing-box is missing or unsafe: $sing_box"
 if [ -z "$image" ]; then image=$("${script_dir}/fetch-openwrt.sh"); fi
 [ -f "$image" ] && [ "$(sha256_file "$image")" = "$OPENWRT_SHA256" ] || die 'OpenWrt image checksum mismatch'
 
@@ -48,7 +52,8 @@ cleanup_input() { rm -rf "$input"; }
 trap cleanup_input EXIT HUP INT TERM
 
 install -m 0700 "$manager" "$input/boxctl"
-install -m 0700 "$core" "$input/mihomo"
+install -m 0700 "$mihomo" "$input/mihomo"
+install -m 0700 "$sing_box" "$input/sing-box"
 cp -R "${script_dir}/guest" "$input/guest"
 cp -R "${script_dir}/fixtures" "$input/fixtures"
 cp -R "${repo_root}/packaging/openwrt/files" "$input/openwrt-files"
@@ -57,7 +62,8 @@ find "$input" -type l -print -quit | grep -q . && die 'staged input contains a s
 {
 	printf 'openwrt_sha256=%s\n' "$OPENWRT_SHA256"
 	printf 'manager_sha256=%s\n' "$(sha256_file "$manager")"
-	printf 'mihomo_sha256=%s\n' "$(sha256_file "$core")"
+	printf 'mihomo_sha256=%s\n' "$(sha256_file "$mihomo")"
+	printf 'sing_box_sha256=%s\n' "$(sha256_file "$sing_box")"
 } >"${output}/manifest.txt"
 
 serial="${output}/serial.sock"

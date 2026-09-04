@@ -624,6 +624,111 @@ func TestCoreUpdateEndpointIsAuthenticatedCSRFProtectedAndNeutral(t *testing.T) 
 	}
 }
 
+func TestEngineCatalogIsAuthenticatedAndReturnsNativeMetadata(t *testing.T) {
+	engines := &fakeEngineService{engines: []EngineInfo{
+		{ID: "mihomo", DisplayName: "Mihomo", ConfigFormat: "yaml", Extensions: []string{".yaml", ".yml"}, Installed: true, Compatible: true, Selected: true, Running: true, SupportedCaptureModes: []string{"tproxy"}, Management: EngineManagementCapabilities{Updates: true, ExternalDashboard: true}},
+		{ID: "sing-box", DisplayName: "sing-box", ConfigFormat: "json", Extensions: []string{".json"}, Installed: false, Compatible: false, Management: EngineManagementCapabilities{RemoteProfiles: true, Updates: true}},
+	}}
+	handler := newTestHandler(t, Services{
+		Credentials: fakeCredentials{}, SessionSecrets: &memorySecretStore{}, Engines: engines,
+	})
+	if anonymous := perform(handler, http.MethodGet, "/api/v1/engines", "", nil, ""); anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous engine catalog = %d, want 401", anonymous.Code)
+	}
+	cookie, _ := login(t, handler)
+	response := perform(handler, http.MethodGet, "/api/v1/engines", "", cookie, "")
+	if response.Code != http.StatusOK || engines.calls != 1 {
+		t.Fatalf("engine catalog = %d calls=%d body=%s", response.Code, engines.calls, response.Body.String())
+	}
+	for _, expected := range []string{`"id":"mihomo"`, `"configFormat":"yaml"`, `"id":"sing-box"`, `"configFormat":"json"`, `"externalDashboard":true`} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Errorf("engine catalog missing %s: %s", expected, response.Body.String())
+		}
+	}
+}
+
+func TestProfileConfigEndpointsAreScopedAndCSRFProtected(t *testing.T) {
+	configs := &fakeConfigService{document: RawConfigDocument{
+		Format: "json", Content: `{"log":{"level":"info"}}`, Revision: "r1",
+		Profile: &ProfileRef{ID: "sing profile", Name: "Sing", Engine: "sing-box"}, Engine: "sing-box",
+	}}
+	handler := newTestHandler(t, Services{
+		Credentials: fakeCredentials{}, SessionSecrets: &memorySecretStore{},
+		Profiles: fakeProfilesService{profiles: []Profile{{ID: "sing profile", Name: "Sing", Engine: "sing-box"}}}, Config: configs,
+	})
+	path := "/api/v1/profiles/sing%20profile/config"
+	if anonymous := perform(handler, http.MethodGet, path, "", nil, ""); anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous profile config = %d, want 401", anonymous.Code)
+	}
+	cookie, csrf := login(t, handler)
+	loaded := perform(handler, http.MethodGet, path, "", cookie, "")
+	if loaded.Code != http.StatusOK || configs.profileID != "sing profile" || loaded.Header().Get("Cache-Control") != "no-store" || !strings.Contains(loaded.Body.String(), `"engine":"sing-box"`) {
+		t.Fatalf("profile config = %d id=%q headers=%v body=%s", loaded.Code, configs.profileID, loaded.Header(), loaded.Body.String())
+	}
+	withoutCSRF := perform(handler, http.MethodPost, path+"/validate", `{"content":"{}","revision":"r1"}`, cookie, "")
+	if withoutCSRF.Code != http.StatusForbidden || configs.validatedProfileID != "" {
+		t.Fatalf("validation without CSRF = %d id=%q", withoutCSRF.Code, configs.validatedProfileID)
+	}
+	validated := perform(handler, http.MethodPost, path+"/validate", `{"content":"{}","revision":"r1"}`, cookie, csrf)
+	if validated.Code != http.StatusOK || configs.validatedProfileID != "sing profile" || configs.validatedUpdate.Content != "{}" || !strings.Contains(validated.Body.String(), `"valid":true`) {
+		t.Fatalf("profile validation = %d id=%q update=%+v body=%s", validated.Code, configs.validatedProfileID, configs.validatedUpdate, validated.Body.String())
+	}
+	saved := perform(handler, http.MethodPut, path, `{"content":"{}","revision":"r1","apply":"save"}`, cookie, csrf)
+	if saved.Code != http.StatusOK || configs.savedProfileID != "sing profile" || configs.savedUpdate.Apply != "save" || strings.Contains(saved.Body.String(), `"content"`) {
+		t.Fatalf("profile save = %d id=%q update=%+v body=%s", saved.Code, configs.savedProfileID, configs.savedUpdate, saved.Body.String())
+	}
+}
+
+func TestProfileActivationAcceptsOptionalRestartConfirmation(t *testing.T) {
+	profiles := &recordingProfilesService{}
+	handler := newTestHandler(t, Services{
+		Credentials: fakeCredentials{}, SessionSecrets: &memorySecretStore{}, Profiles: profiles,
+	})
+	cookie, csrf := login(t, handler)
+	legacy := perform(handler, http.MethodPost, "/api/v1/profiles/p1/activate", "", cookie, csrf)
+	confirmed := perform(handler, http.MethodPost, "/api/v1/profiles/p1/activate", `{"confirmRestart":true}`, cookie, csrf)
+	if legacy.Code != http.StatusOK || confirmed.Code != http.StatusOK || len(profiles.activations) != 2 {
+		t.Fatalf("profile activations = legacy:%d confirmed:%d calls=%+v", legacy.Code, confirmed.Code, profiles.activations)
+	}
+	if profiles.activations[0].ConfirmRestart || !profiles.activations[1].ConfirmRestart {
+		t.Fatalf("activation confirmations = %+v", profiles.activations)
+	}
+	malformed := perform(handler, http.MethodPost, "/api/v1/profiles/p1/activate", `{"confirmRestart":`, cookie, csrf)
+	if malformed.Code != http.StatusBadRequest || len(profiles.activations) != 2 {
+		t.Fatalf("malformed activation = %d calls=%+v body=%s", malformed.Code, profiles.activations, malformed.Body.String())
+	}
+}
+
+func TestPerEngineUpdateRouteIsAuthenticatedValidatedAndCSRFProtected(t *testing.T) {
+	updates := &fakeCoreUpdateService{engineStatuses: map[string]CoreUpdateStatus{
+		"mihomo":   {Engine: "mihomo", CurrentVersion: "v1.19.29", LatestVersion: "v1.19.30", Channel: "stable", UpdateAvailable: true},
+		"sing-box": {Engine: "sing-box", LatestVersion: "v1.14.0", Channel: "stable", UpdateAvailable: true},
+	}}
+	handler := newTestHandler(t, Services{
+		Credentials: fakeCredentials{}, SessionSecrets: &memorySecretStore{}, CoreUpdates: updates,
+	})
+	if anonymous := perform(handler, http.MethodGet, "/api/v1/engines/sing-box/update", "", nil, ""); anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous engine update = %d, want 401", anonymous.Code)
+	}
+	cookie, csrf := login(t, handler)
+	status := perform(handler, http.MethodGet, "/api/v1/engines/sing-box/update", "", cookie, "")
+	if status.Code != http.StatusOK || updates.engineStatusCalls != 1 || !strings.Contains(status.Body.String(), `"engine":"sing-box"`) {
+		t.Fatalf("engine update status = %d calls=%d body=%s", status.Code, updates.engineStatusCalls, status.Body.String())
+	}
+	withoutCSRF := perform(handler, http.MethodPost, "/api/v1/engines/sing-box/update", `{}`, cookie, "")
+	if withoutCSRF.Code != http.StatusForbidden || len(updates.engineInstalls) != 0 {
+		t.Fatalf("engine update without CSRF = %d installs=%v", withoutCSRF.Code, updates.engineInstalls)
+	}
+	installed := perform(handler, http.MethodPost, "/api/v1/engines/sing-box/update", `{}`, cookie, csrf)
+	if installed.Code != http.StatusOK || !reflect.DeepEqual(updates.engineInstalls, []string{"sing-box"}) || !strings.Contains(installed.Body.String(), `"currentVersion":"v1.14.0"`) {
+		t.Fatalf("engine install = %d installs=%v body=%s", installed.Code, updates.engineInstalls, installed.Body.String())
+	}
+	invalid := perform(handler, http.MethodGet, "/api/v1/engines/unknown/update", "", cookie, "")
+	if invalid.Code != http.StatusNotFound || updates.engineStatusCalls != 1 {
+		t.Fatalf("invalid engine update = %d calls=%d body=%s", invalid.Code, updates.engineStatusCalls, invalid.Body.String())
+	}
+}
+
 func TestExternalDashboardAPIAndFilesAreAuthenticatedAndScoped(t *testing.T) {
 	dashboard := &fakeExternalDashboardService{status: ExternalDashboardStatus{
 		Name: "Zashboard", Installed: true, CurrentVersion: "v3.22.0", LatestVersion: "v3.23.0", UpdateAvailable: true,
@@ -842,8 +947,8 @@ func TestProxySubscriptionCRUDIsCSRFProtectedAndWriteOnly(t *testing.T) {
 	})
 	cookie, csrf := login(t, handler)
 	secretURL := "https://example.test/private-token"
-	created := perform(handler, http.MethodPost, "/api/v1/proxy-subscriptions", `{"name":"Remote","sourceUrl":"`+secretURL+`","headers":{"X-HWID":"private-hwid"}}`, cookie, csrf)
-	if created.Code != http.StatusCreated || service.draft.SourceURL != secretURL || strings.Contains(created.Body.String(), "private-token") || strings.Contains(created.Body.String(), "private-hwid") {
+	created := perform(handler, http.MethodPost, "/api/v1/proxy-subscriptions", `{"engine":"mihomo","name":"Remote","sourceUrl":"`+secretURL+`","headers":{"X-HWID":"private-hwid"}}`, cookie, csrf)
+	if created.Code != http.StatusCreated || service.draft.Engine != "mihomo" || service.draft.SourceURL != secretURL || !strings.Contains(created.Body.String(), `"engine":"mihomo"`) || strings.Contains(created.Body.String(), "private-token") || strings.Contains(created.Body.String(), "private-hwid") {
 		t.Fatalf("create = %d draft=%+v body=%s", created.Code, service.draft, created.Body.String())
 	}
 	read := perform(handler, http.MethodGet, "/api/v1/proxy-subscriptions/sub-1", "", cookie, "")
@@ -948,7 +1053,7 @@ func TestAdvancedSettingsPatchPreservesTypedFields(t *testing.T) {
 
 func TestRuleListCRUDUsesOptimisticRevisions(t *testing.T) {
 	ruleLists := &fakeRuleListService{document: RuleListDocument{
-		RuleList: RuleList{ID: "local", Name: "Local bypass", Format: "text", Enabled: true, RuleCount: 1, Revision: "r1"},
+		RuleList: RuleList{ID: "local", Engine: "mihomo", Name: "Local bypass", Format: "text", Enabled: true, RuleCount: 1, Revision: "r1"},
 		Content:  "example.test\n",
 	}}
 	handler := newTestHandler(t, Services{
@@ -966,8 +1071,8 @@ func TestRuleListCRUDUsesOptimisticRevisions(t *testing.T) {
 	if withoutCSRF.Code != http.StatusForbidden {
 		t.Fatalf("create without CSRF = %d, want 403", withoutCSRF.Code)
 	}
-	created := perform(handler, http.MethodPost, "/api/v1/rule-lists", `{"name":"New","format":"text","enabled":true,"content":"test"}`, cookie, csrf)
-	if created.Code != http.StatusCreated || created.Header().Get("ETag") != `"c1"` || created.Header().Get("Cache-Control") != "no-store" {
+	created := perform(handler, http.MethodPost, "/api/v1/rule-lists", `{"engine":"mihomo","name":"New","format":"text","enabled":true,"content":"test"}`, cookie, csrf)
+	if created.Code != http.StatusCreated || ruleLists.lastDraft.Engine != "mihomo" || !strings.Contains(created.Body.String(), `"engine":"mihomo"`) || created.Header().Get("ETag") != `"c1"` || created.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("create = %d headers=%v body=%s", created.Code, created.Header(), created.Body.String())
 	}
 	loaded := perform(handler, http.MethodGet, "/api/v1/rule-lists/local", "", cookie, "")
@@ -1191,6 +1296,56 @@ func TestBackupExportImportAuthCSRFLimitsAndHeaders(t *testing.T) {
 	}
 }
 
+func TestBackupImportBlocksLoginThroughSessionRevocation(t *testing.T) {
+	backups := &blockingBackupService{started: make(chan struct{}), release: make(chan struct{})}
+	handler, err := NewHandler(Config{MaxBackupBytes: 64}, Services{
+		Credentials:    fakeCredentials{},
+		SessionSecrets: &memorySecretStore{},
+		Backups:        backups,
+	})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	cookie, csrf := login(t, handler)
+
+	importDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		importDone <- performWithHeaders(handler, http.MethodPost, "/api/v1/backups/import", "application/octet-stream", []byte("backup"), cookie, csrf, nil)
+	}()
+	select {
+	case <-backups.started:
+	case <-time.After(time.Second):
+		t.Fatal("backup import did not enter postflight")
+	}
+
+	loginDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		loginDone <- perform(handler, http.MethodPost, "/api/v1/auth/login", `{"password":"correct horse"}`, nil, "")
+	}()
+	select {
+	case response := <-loginDone:
+		t.Fatalf("login escaped backup mutation gate: %d %s", response.Code, response.Body.String())
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(backups.release)
+	select {
+	case response := <-importDone:
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"sessionsRevoked":true`) {
+			t.Fatalf("backup import = %d %s", response.Code, response.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("backup import did not finish")
+	}
+	select {
+	case response := <-loginDone:
+		if response.Code != http.StatusOK {
+			t.Fatalf("login after restore = %d %s", response.Code, response.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("login remained blocked after backup finalization")
+	}
+}
+
 func newTestHandler(t *testing.T, services Services) http.Handler {
 	t.Helper()
 	handler, err := NewHandler(Config{AllowedHosts: []string{"example.com"}}, services)
@@ -1348,6 +1503,16 @@ func (s fakeProfilesService) DetachProfileSource(context.Context, string) (Profi
 	return s.profiles[0], nil
 }
 
+type fakeEngineService struct {
+	engines []EngineInfo
+	calls   int
+}
+
+func (s *fakeEngineService) Engines(context.Context) ([]EngineInfo, error) {
+	s.calls++
+	return append([]EngineInfo(nil), s.engines...), nil
+}
+
 type fakeLogService struct{ stream <-chan LogEntry }
 
 func (s fakeLogService) SystemLogs(context.Context, LogQuery) ([]LogEntry, error) { return nil, nil }
@@ -1439,8 +1604,11 @@ func (s *fakeCoreService) StreamCoreLogs(context.Context, LogQuery) (<-chan LogE
 }
 
 type fakeCoreUpdateService struct {
-	status   CoreUpdateStatus
-	installs int
+	status            CoreUpdateStatus
+	installs          int
+	engineStatuses    map[string]CoreUpdateStatus
+	engineStatusCalls int
+	engineInstalls    []string
 }
 
 func (s *fakeCoreUpdateService) CoreUpdateStatus(context.Context) (CoreUpdateStatus, error) {
@@ -1450,6 +1618,24 @@ func (s *fakeCoreUpdateService) CoreUpdateStatus(context.Context) (CoreUpdateSta
 func (s *fakeCoreUpdateService) InstallCoreUpdate(context.Context) (CoreUpdateResult, error) {
 	s.installs++
 	return CoreUpdateResult{PreviousVersion: s.status.CurrentVersion, CurrentVersion: s.status.LatestVersion, Restarted: true}, nil
+}
+
+func (s *fakeCoreUpdateService) EngineUpdateStatus(_ context.Context, engine string) (CoreUpdateStatus, error) {
+	s.engineStatusCalls++
+	status, ok := s.engineStatuses[engine]
+	if !ok {
+		return CoreUpdateStatus{}, ErrNotFound
+	}
+	return status, nil
+}
+
+func (s *fakeCoreUpdateService) InstallEngineUpdate(_ context.Context, engine string) (CoreUpdateResult, error) {
+	status, ok := s.engineStatuses[engine]
+	if !ok {
+		return CoreUpdateResult{}, ErrNotFound
+	}
+	s.engineInstalls = append(s.engineInstalls, engine)
+	return CoreUpdateResult{Engine: engine, PreviousVersion: status.CurrentVersion, CurrentVersion: status.LatestVersion, Restarted: true}, nil
 }
 
 type fakeExternalDashboardService struct {
@@ -1498,7 +1684,14 @@ func (handler *expiringDashboardHandler) ServeHTTP(_ http.ResponseWriter, reques
 	close(handler.canceled)
 }
 
-type fakeConfigService struct{ document RawConfigDocument }
+type fakeConfigService struct {
+	document           RawConfigDocument
+	profileID          string
+	validatedProfileID string
+	validatedUpdate    RawConfigUpdate
+	savedProfileID     string
+	savedUpdate        RawConfigUpdate
+}
 
 func (s *fakeConfigService) RawConfig(context.Context) (RawConfigDocument, error) {
 	return s.document, nil
@@ -1512,6 +1705,23 @@ func (s *fakeConfigService) SaveRawConfig(_ context.Context, update RawConfigUpd
 	return ConfigSaveResult{Revision: "r2", ReloadRequired: true}, nil
 }
 
+func (s *fakeConfigService) ProfileConfig(_ context.Context, id string) (RawConfigDocument, error) {
+	s.profileID = id
+	return s.document, nil
+}
+
+func (s *fakeConfigService) ValidateProfileConfig(_ context.Context, id string, update RawConfigUpdate) (ConfigValidation, error) {
+	s.validatedProfileID = id
+	s.validatedUpdate = update
+	return ConfigValidation{Valid: true}, nil
+}
+
+func (s *fakeConfigService) SaveProfileConfig(_ context.Context, id string, update RawConfigUpdate) (ConfigSaveResult, error) {
+	s.savedProfileID = id
+	s.savedUpdate = update
+	return ConfigSaveResult{Revision: "r2", ReloadRequired: true, Apply: update.Apply}, nil
+}
+
 type fakeLifecycleService struct {
 	starts   int
 	stops    int
@@ -1522,7 +1732,10 @@ func (s *fakeLifecycleService) Start(context.Context) error   { s.starts++; retu
 func (s *fakeLifecycleService) Stop(context.Context) error    { s.stops++; return nil }
 func (s *fakeLifecycleService) Restart(context.Context) error { s.restarts++; return nil }
 
-type recordingProfilesService struct{ draft ProfileDraft }
+type recordingProfilesService struct {
+	draft       ProfileDraft
+	activations []ProfileActivationRequest
+}
 
 func (s *recordingProfilesService) Profiles(context.Context) ([]Profile, error) { return nil, nil }
 func (s *recordingProfilesService) Profile(context.Context, string) (Profile, error) {
@@ -1535,7 +1748,7 @@ type recordingProxySubscriptionService struct {
 }
 
 func (service *recordingProxySubscriptionService) item() ProxySubscription {
-	return ProxySubscription{ID: "sub-1", Name: "Remote", ProviderName: "boxctl-sub-1", SourceKind: "remote", Enabled: true, HeaderNames: []string{"X-Hwid"}, UpdateIntervalHours: 24}
+	return ProxySubscription{ID: "sub-1", Engine: "mihomo", Name: "Remote", ProviderName: "boxctl-sub-1", SourceKind: "remote", Enabled: true, HeaderNames: []string{"X-Hwid"}, UpdateIntervalHours: 24}
 }
 func (service *recordingProxySubscriptionService) ProxySubscriptions(context.Context) ([]ProxySubscription, error) {
 	return []ProxySubscription{service.item()}, nil
@@ -1568,6 +1781,10 @@ func (s *recordingProfilesService) DeleteProfile(context.Context, string) error 
 func (s *recordingProfilesService) ActivateProfile(context.Context, string) (Profile, error) {
 	return Profile{}, ErrNotFound
 }
+func (s *recordingProfilesService) ActivateProfileWithRequest(_ context.Context, id string, request ProfileActivationRequest) (Profile, error) {
+	s.activations = append(s.activations, request)
+	return Profile{ID: id, Name: "Activated", Engine: "mihomo", Active: true}, nil
+}
 func (s *recordingProfilesService) RefreshProfile(context.Context, string) (Profile, error) {
 	return Profile{}, ErrNotFound
 }
@@ -1597,7 +1814,7 @@ func (s *fakeRuleListService) RuleList(_ context.Context, id string) (RuleListDo
 func (s *fakeRuleListService) CreateRuleList(_ context.Context, draft RuleListDraft) (RuleListDocument, error) {
 	s.lastDraft = draft
 	return RuleListDocument{
-		RuleList: RuleList{ID: "created", Name: draft.Name, Format: draft.Format, Enabled: draft.Enabled, Revision: "c1"},
+		RuleList: RuleList{ID: "created", Engine: draft.Engine, Name: draft.Name, Format: draft.Format, Enabled: draft.Enabled, Revision: "c1"},
 		Content:  draft.Content,
 	}, nil
 }
@@ -1696,6 +1913,25 @@ type fakeBackupService struct {
 	archive BackupArchive
 	imports []BackupImport
 	exports []BackupExportOptions
+}
+
+type blockingBackupService struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (service *blockingBackupService) ExportBackup(context.Context, BackupExportOptions) (BackupArchive, error) {
+	return BackupArchive{}, nil
+}
+
+func (service *blockingBackupService) ImportBackup(ctx context.Context, _ BackupImport) (BackupImportResult, error) {
+	close(service.started)
+	select {
+	case <-service.release:
+		return BackupImportResult{Imported: true}, nil
+	case <-ctx.Done():
+		return BackupImportResult{}, ctx.Err()
+	}
 }
 
 func (s *fakeBackupService) ExportBackup(_ context.Context, options BackupExportOptions) (BackupArchive, error) {

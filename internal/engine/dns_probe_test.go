@@ -29,6 +29,15 @@ func TestProbeDNSRequiresMatchingValidResponse(t *testing.T) {
 	if err := probeDNSWithTimeout(context.Background(), wrongID, 500*time.Millisecond); err == nil || !strings.Contains(err.Error(), "transaction ID") {
 		t.Fatalf("mismatched response error = %v", err)
 	}
+
+	serverFailure := startFakeDNSResponder(t, func(query []byte) []byte {
+		response := append([]byte(nil), query...)
+		binary.BigEndian.PutUint16(response[2:4], 0x8182)
+		return response
+	})
+	if err := probeDNSWithTimeout(context.Background(), serverFailure, 500*time.Millisecond); err == nil || !strings.Contains(err.Error(), "failure response code") {
+		t.Fatalf("SERVFAIL response error = %v", err)
+	}
 }
 
 func TestProbeDNSDisabledAndNonresponsive(t *testing.T) {
@@ -50,7 +59,7 @@ func TestProbeDNSDisabledAndNonresponsive(t *testing.T) {
 
 func TestValidateDNSResponseRejectsMalformedRecord(t *testing.T) {
 	t.Parallel()
-	query, id, err := rootDNSQuery()
+	query, id, name, err := dnsProbeQuery()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +67,7 @@ func TestValidateDNSResponseRejectsMalformedRecord(t *testing.T) {
 	binary.BigEndian.PutUint16(response[2:4], 0x8180)
 	binary.BigEndian.PutUint16(response[6:8], 1)
 	response = append(response, 0xc0, 0x0c, 0, 1)
-	if err := validateDNSResponse(response, id); err == nil {
+	if err := validateDNSResponse(response, id, name); err == nil {
 		t.Fatal("truncated resource record was accepted")
 	}
 }

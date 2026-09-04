@@ -161,6 +161,37 @@ func TestOpenWrtActivationOrdersAndReversesTransaction(t *testing.T) {
 	}
 }
 
+func TestOpenWrtActivationPersistsAndCleansUpSingBoxGeneration(t *testing.T) {
+	events := []string{}
+	activation := testActivation(t, fakeGatewayController{events: &events}, fakeDNSController{events: &events})
+	prepared := completePrepared(engine.CapturePlan{
+		TCP:      engine.ProtocolCapture{Method: engine.CaptureTPROXY, Port: 7894},
+		UDP:      engine.ProtocolCapture{Method: engine.CaptureTPROXY, Port: 7894},
+		DNS:      engine.DNSEndpoint{Enabled: true, Host: "0.0.0.0", Port: 7874},
+		LoopMark: 2,
+	})
+	prepared.Engine = state.EngineSingBox
+	prepared.Controller.Secret = "private-controller-secret"
+
+	if err := activation.Activate(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	active, err := activation.ActivePrepared(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Engine != state.EngineSingBox || active.Controller != prepared.Controller {
+		t.Fatalf("active generation = %+v, want sing-box controller %+v", active, prepared.Controller)
+	}
+	if err := activation.Deactivate(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"dns-backup", "gateway-apply", "dns-apply", "dns-restore", "gateway-cleanup"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
 func TestOpenWrtActivationServerModeLeavesNetworkUntouched(t *testing.T) {
 	events := []string{}
 	activation := testActivation(t, fakeGatewayController{events: &events}, fakeDNSController{events: &events})

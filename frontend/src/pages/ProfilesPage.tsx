@@ -1,12 +1,19 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { APIError, request } from '../api'
+import { requestAppRefresh } from '../app-events'
+import { useApp } from '../app-context'
 import { Badge, Empty, ErrorPanel, formatDate, Loading, PageHeader } from '../components/Common'
+import { legacyEngine, selectedEngine } from '../engines'
 import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
-import type { Profile } from '../types'
+import type { EngineID, EngineInfo, Profile } from '../types'
 
-export function ProfilesPage({ embedded = false }: { embedded?: boolean }) {
+export function ProfilesPage({ embedded = false, engine }: { embedded?: boolean; engine?: EngineInfo }) {
+  const app = useApp()
   const { locale, t } = useI18n()
+  const activeEngine = engine ?? selectedEngine(app.engines ?? [legacyEngine(app.capabilities)])
+  const engineID = activeEngine?.id ?? 'mihomo'
+  const remoteProfiles = activeEngine?.management.remoteProfiles ?? engineID === 'mihomo'
   const query = useQuery<Profile[]>('/profiles')
   const [name, setName] = useState('')
   const [sourceMode, setSourceMode] = useState<ProfileSourceMode>('remote')
@@ -19,12 +26,16 @@ export function ProfilesPage({ embedded = false }: { embedded?: boolean }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState<APIError>()
 
+  useEffect(() => {
+    if (!remoteProfiles && sourceMode === 'remote') setSourceMode('local')
+  }, [remoteProfiles, sourceMode])
+
   const create = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setBusy('create')
     setError(undefined)
     try {
-      await request('/profiles', { method: 'POST', body: JSON.stringify(profileDraftPayload(name, sourceMode, sourceURL, content, interval)) })
+      await request('/profiles', { method: 'POST', body: JSON.stringify(profileDraftPayload(name, sourceMode, sourceURL, content, interval, engineID)) })
       setName('')
       setSourceURL('')
       setContent('')
@@ -38,18 +49,23 @@ export function ProfilesPage({ embedded = false }: { embedded?: boolean }) {
   }
 
   const mutate = async (profile: Profile, action: 'activate' | 'delete' | 'refresh' | 'toggle' | 'detach') => {
+    if (action === 'activate' && !window.confirm(t('confirmActivateProfile'))) return
     if (action === 'delete' && !window.confirm(t('confirmDelete'))) return
     if (action === 'detach' && !window.confirm(t('confirmDetachSource'))) return
     setBusy(`${action}:${profile.id}`)
     setError(undefined)
     try {
       const id = encodeURIComponent(profile.id)
-      if (action === 'activate') await request(`/profiles/${id}/activate`, { method: 'POST', body: '{}' })
+      if (action === 'activate') await request(`/profiles/${id}/activate`, { method: 'POST', body: JSON.stringify(profileActivationPayload()) })
       if (action === 'delete') await request(`/profiles/${id}`, { method: 'DELETE' })
       if (action === 'refresh') await request(`/profiles/${id}/refresh`, { method: 'POST', body: '{}' })
       if (action === 'detach') await request(`/profiles/${id}/source/detach`, { method: 'POST', body: '{}' })
       if (action === 'toggle') await request(`/profiles/${id}`, { method: 'PATCH', body: JSON.stringify({ sourceEnabled: !profile.sourceEnabled }) })
       query.reload()
+      if (action === 'activate') {
+        requestAppRefresh()
+        await app.refreshCapabilities()
+      }
     } catch (reason) {
       setError(reason instanceof APIError ? reason : new APIError(0, 'network_error', String(reason)))
     } finally {
@@ -83,6 +99,7 @@ export function ProfilesPage({ embedded = false }: { embedded?: boolean }) {
   }
 
   const refreshAction = <button className="du-btn du-btn-outline du-btn-sm" onClick={query.reload}>{t('refresh')}</button>
+  const profiles = query.data?.filter((profile) => profile.engine === engineID)
 
   return <>
     {embedded
@@ -92,21 +109,21 @@ export function ProfilesPage({ embedded = false }: { embedded?: boolean }) {
     <section className="du-card panel">
       <form className="profile-form" onSubmit={create}>
         <label>{t('profileName')}<input className="du-input du-input-sm" value={name} onInput={(event) => setName(event.currentTarget.value)} maxLength={128} required /></label>
-        <label>{t('profileSourceType')}<select className="du-select du-select-sm" value={sourceMode} onChange={(event) => setSourceMode(event.currentTarget.value as ProfileSourceMode)}><option value="remote">{t('remoteURL')}</option><option value="local">{t('localYAML')}</option></select></label>
+        <label>{t('profileSourceType')}<select className="du-select du-select-sm" value={sourceMode} onChange={(event) => setSourceMode(event.currentTarget.value as ProfileSourceMode)}>{remoteProfiles && <option value="remote">{t('remoteURL')}</option>}<option value="local">{t(engineID === 'sing-box' ? 'localJSON' : 'localYAML')}</option></select></label>
         {sourceMode === 'remote' && <>
           <label className="grow">{t('sourceURL')}<input className="du-input du-input-sm" type="url" value={sourceURL} onInput={(event) => setSourceURL(event.currentTarget.value)} autoComplete="off" required /><small>{t('sourceURLHint')}</small></label>
           <label>{t('updateInterval')}<input className="du-input du-input-sm" type="number" min="1" max="168" value={interval} placeholder="auto" onInput={(event) => setInterval(event.currentTarget.value === '' ? '' : event.currentTarget.valueAsNumber)} /><small>{t('updateIntervalHint')}</small></label>
         </>}
-        {sourceMode === 'local' && <label className="grow">{t('localYAML')}<textarea className="du-textarea du-textarea-sm" rows={8} value={content} onInput={(event) => setContent(event.currentTarget.value)} spellCheck={false} required /><small>{t('localYAMLHint')}</small></label>}
+        {sourceMode === 'local' && <label className="grow">{t(engineID === 'sing-box' ? 'localJSON' : 'localYAML')}<textarea className="du-textarea du-textarea-sm" rows={8} value={content} onInput={(event) => setContent(event.currentTarget.value)} spellCheck={false} required /><small>{t(engineID === 'sing-box' ? 'localJSONHint' : 'localYAMLHint')}</small></label>}
         <button className="du-btn du-btn-primary du-btn-sm" disabled={busy === 'create'}>{busy === 'create' ? t('adding') : t('addProfile')}</button>
       </form>
     </section>
     {query.loading && !query.data && <Loading />}
     {query.error && <ErrorPanel error={query.error} onRetry={query.reload} />}
-    {query.data && query.data.length === 0 && <Empty />}
-    {query.data && <div className="card-list">{query.data.map((profile) => <article className="du-card profile-card" key={profile.id}>
+    {profiles && profiles.length === 0 && <Empty />}
+    {profiles && <div className="card-list">{profiles.map((profile) => <article className="du-card profile-card" key={profile.id}>
       <div className="profile-main">
-        <div className="title-row"><h2>{profile.name}</h2><Badge>{profile.engine}</Badge>{profile.active && <Badge tone="good">{t('active')}</Badge>}</div>
+        <div className="title-row"><h2>{profile.name}</h2><Badge>{profile.engine}</Badge>{profile.active && <Badge tone="good">{t('active')}</Badge>}{profile.restartRequired && <Badge tone="warning">{t('pendingRestart')}</Badge>}</div>
         <dl className="inline-details">
           <div><dt>{t('source')}</dt><dd>{profile.sourceKind || '—'}</dd></div>
           <div><dt>{t('nodes')}</dt><dd>{profile.nodeCount ?? 0}</dd></div>
@@ -125,7 +142,7 @@ export function ProfilesPage({ embedded = false }: { embedded?: boolean }) {
         </form>}
       </div>
       <div className="card-actions">
-        {!profile.active && <button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== ''} onClick={() => mutate(profile, 'activate')}>{t('activate')}</button>}
+        {!profile.active && <button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== '' || !activeEngine?.installed || !activeEngine.compatible} title={!activeEngine?.installed || !activeEngine.compatible ? t('engineUnavailable') : undefined} onClick={() => mutate(profile, 'activate')}>{t('activate')}</button>}
         {profile.hasSource && <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={() => mutate(profile, 'refresh')}>{t('refreshSource')}</button>}
         {profile.hasSource && <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={() => mutate(profile, 'toggle')}>{profile.sourceEnabled ? t('pauseSource') : t('resumeSource')}</button>}
         {profile.hasSource && <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={() => beginEdit(profile)}>{t('editSource')}</button>}
@@ -138,10 +155,14 @@ export function ProfilesPage({ embedded = false }: { embedded?: boolean }) {
 
 export type ProfileSourceMode = 'remote' | 'local'
 
-export function profileDraftPayload(name: string, sourceMode: ProfileSourceMode, sourceURL: string, content: string, interval: number | '') {
+export function profileActivationPayload() {
+  return { confirmRestart: true }
+}
+
+export function profileDraftPayload(name: string, sourceMode: ProfileSourceMode, sourceURL: string, content: string, interval: number | '', engine: EngineID = 'mihomo') {
   return {
     name,
-    engine: 'mihomo',
+    engine,
     ...(sourceMode === 'local'
       ? { content }
       : { sourceUrl: sourceURL, ...(interval === '' ? {} : { updateIntervalHours: interval }) }),

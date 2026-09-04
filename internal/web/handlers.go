@@ -108,6 +108,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusServiceUnavailable, "request_canceled", "Login request was canceled")
 		return
 	}
+	// Backup import holds the same gate from the state swap through runtime
+	// postflight and session-key revocation. Serialize credential lookup and
+	// token issuance with that interval so a login can never authenticate a
+	// provisional restored password and survive a later rollback.
+	if !s.acquireMutation(r.Context()) {
+		s.loginLimiter.cancel(key)
+		writeAPIError(w, r, http.StatusServiceUnavailable, "request_canceled", "Login request was canceled")
+		return
+	}
+	defer s.releaseMutation()
 
 	credential, err := s.services.Credentials.Credential(r.Context())
 	if errors.Is(err, ErrNotFound) {
@@ -211,6 +221,56 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	sanitizeStatus(&status)
 	writeData(w, http.StatusOK, status)
+}
+
+func (s *Server) handleEngines(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	if s.services.Engines == nil {
+		writeUnsupported(w, r)
+		return
+	}
+	engines, err := s.services.Engines.Engines(r.Context())
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	if engines == nil {
+		engines = []EngineInfo{}
+	}
+	writeData(w, http.StatusOK, engines)
+}
+
+func (s *Server) handleEngineRoute(w http.ResponseWriter, r *http.Request) {
+	segments, ok := routeSegments(r.URL.Path, "/api/v1/engines/")
+	if !ok || len(segments) != 2 || segments[1] != "update" || !validProfileEngine(segments[0]) {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Engine endpoint not found")
+		return
+	}
+	updates, ok := s.services.CoreUpdates.(EngineUpdateService)
+	if !ok {
+		writeUnsupported(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		status, err := updates.EngineUpdateStatus(r.Context(), segments[0])
+		if err != nil {
+			writeServiceError(w, r, err)
+			return
+		}
+		writeData(w, http.StatusOK, status)
+	case http.MethodPost:
+		result, err := updates.InstallEngineUpdate(r.Context(), segments[0])
+		if err != nil {
+			writeServiceError(w, r, err)
+			return
+		}
+		writeData(w, http.StatusOK, result)
+	default:
+		requireMethod(w, r, http.MethodGet, http.MethodPost)
+	}
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -347,13 +407,77 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		if !requireMethod(w, r, http.MethodPost) {
 			return
 		}
-		profile, err := s.services.Profiles.ActivateProfile(r.Context(), id)
+		request := ProfileActivationRequest{}
+		if !s.decodeOptionalJSON(w, r, &request) {
+			return
+		}
+		var profile Profile
+		var err error
+		if confirmed, ok := s.services.Profiles.(ConfirmedProfileService); ok {
+			profile, err = confirmed.ActivateProfileWithRequest(r.Context(), id, request)
+		} else {
+			profile, err = s.services.Profiles.ActivateProfile(r.Context(), id)
+		}
 		if err != nil {
 			writeServiceError(w, r, err)
 			return
 		}
 		sanitizeProfile(&profile)
 		writeData(w, http.StatusOK, profile)
+		return
+	}
+	if len(segments) == 2 && segments[1] == "config" {
+		configs, ok := s.services.Config.(ProfileConfigService)
+		if !ok {
+			writeUnsupported(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			document, err := configs.ProfileConfig(r.Context(), id)
+			if err != nil {
+				writeServiceError(w, r, err)
+				return
+			}
+			writeData(w, http.StatusOK, document)
+		case http.MethodPut:
+			var update RawConfigUpdate
+			if !s.decodeJSON(w, r, &update) {
+				return
+			}
+			result, err := configs.SaveProfileConfig(r.Context(), id, update)
+			if err != nil {
+				writeServiceError(w, r, err)
+				return
+			}
+			writeData(w, http.StatusOK, result)
+		default:
+			requireMethod(w, r, http.MethodGet, http.MethodPut)
+		}
+		return
+	}
+	if len(segments) == 3 && segments[1] == "config" && segments[2] == "validate" {
+		if !requireMethod(w, r, http.MethodPost) {
+			return
+		}
+		configs, ok := s.services.Config.(ProfileConfigService)
+		if !ok {
+			writeUnsupported(w, r)
+			return
+		}
+		var update RawConfigUpdate
+		if !s.decodeJSON(w, r, &update) {
+			return
+		}
+		validation, err := configs.ValidateProfileConfig(r.Context(), id, update)
+		if err != nil {
+			writeServiceError(w, r, err)
+			return
+		}
+		for i := range validation.Diagnostics {
+			validation.Diagnostics[i].Message = redactText(validation.Diagnostics[i].Message)
+		}
+		writeData(w, http.StatusOK, validation)
 		return
 	}
 	if len(segments) == 2 && segments[1] == "refresh" {

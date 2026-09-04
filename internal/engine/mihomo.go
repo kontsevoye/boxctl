@@ -3,31 +3,24 @@ package engine
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
 	configpkg "github.com/kontsevoye/boxctl/internal/config"
-	"github.com/kontsevoye/boxctl/internal/state"
 )
 
 const (
-	mihomoEngineName         = "mihomo"
-	defaultMihomoStopTimeout = 10 * time.Second
-	defaultMihomoLogBuffer   = 512
-	maxCommandOutput         = 1 << 20
+	mihomoEngineName = "mihomo"
+	maxCommandOutput = 1 << 20
 )
 
 var mihomoCapabilities = Capabilities{
@@ -64,68 +57,26 @@ type MihomoOptions struct {
 // MihomoDriver implements Config, Runtime and Control for an external Mihomo
 // binary. One driver supervises at most one process at a time.
 type MihomoDriver struct {
-	httpClient       *http.Client
-	stopTimeout      time.Duration
-	logs             chan LogEntry
-	processStatePath string
-	sequence         atomic.Uint64
-
-	mu              sync.RWMutex
-	cmd             *exec.Cmd
-	pid             int
-	processIdentity string
-	launchArgs      []string
-	done            chan struct{}
-	prepared        PreparedCore
-	startedAt       time.Time
-	lastExitError   string
-	logCancel       context.CancelFunc
+	httpClient *http.Client
+	supervisor *externalProcessSupervisor
 }
 
 func NewMihomoDriver(options MihomoOptions) *MihomoDriver {
-	stopTimeout := options.StopTimeout
-	if stopTimeout <= 0 {
-		stopTimeout = defaultMihomoStopTimeout
-	}
-	logBuffer := options.LogBuffer
-	if logBuffer <= 0 {
-		logBuffer = defaultMihomoLogBuffer
-	}
 	httpClient := options.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
-	return &MihomoDriver{
-		httpClient:       httpClient,
-		stopTimeout:      stopTimeout,
-		logs:             make(chan LogEntry, logBuffer),
-		processStatePath: options.ProcessStatePath,
-	}
-}
-
-const persistedMihomoProcessVersion = 1
-
-type persistedMihomoPrepared struct {
-	Engine            string             `json:"engine"`
-	BinaryPath        string             `json:"binaryPath"`
-	SourceConfigPath  string             `json:"sourceConfigPath"`
-	RuntimeConfigPath string             `json:"runtimeConfigPath"`
-	RuntimeConfigRoot string             `json:"runtimeConfigRoot"`
-	HomeDir           string             `json:"homeDir"`
-	Args              []string           `json:"args"`
-	Env               []string           `json:"env,omitempty"`
-	Capture           CapturePlan        `json:"capture"`
-	Controller        ControllerEndpoint `json:"controller"`
-	Capabilities      Capabilities       `json:"capabilities"`
-}
-
-type persistedMihomoProcess struct {
-	Version    int                     `json:"version"`
-	PID        int                     `json:"pid"`
-	Identity   string                  `json:"identity"`
-	StartedAt  time.Time               `json:"startedAt"`
-	LaunchArgs []string                `json:"launchArgs"`
-	Prepared   persistedMihomoPrepared `json:"prepared"`
+	driver := &MihomoDriver{httpClient: httpClient}
+	driver.supervisor = newExternalProcessSupervisor(externalProcessSupervisorOptions{
+		Engine: mihomoEngineName, DisplayName: "Mihomo",
+		ProcessStatePath: options.ProcessStatePath, StopTimeout: options.StopTimeout, LogBuffer: options.LogBuffer,
+		DefaultArgs: func(prepared PreparedCore) []string {
+			return []string{"-d", prepared.HomeDir, "-f", prepared.RuntimeConfigPath}
+		},
+		Validate: driver.Validate, ValidatePrepared: validatePreparedMihomo,
+		Cleanup: CleanupPreparedRuntime, LogPump: driver.controllerLogPump,
+	})
+	return driver
 }
 
 func (d *MihomoDriver) Capabilities() Capabilities {
@@ -368,369 +319,35 @@ func validatePreparedMihomo(prepared PreparedCore) error {
 	return nil
 }
 
-func persistedPreparedCore(prepared PreparedCore) persistedMihomoPrepared {
-	return persistedMihomoPrepared{
-		Engine: prepared.Engine, BinaryPath: prepared.BinaryPath,
-		SourceConfigPath: prepared.SourceConfigPath, RuntimeConfigPath: prepared.RuntimeConfigPath,
-		RuntimeConfigRoot: prepared.runtimeConfigRoot, HomeDir: prepared.HomeDir,
-		Args: append([]string(nil), prepared.Args...), Env: append([]string(nil), prepared.Env...),
-		Capture: prepared.Capture, Controller: prepared.Controller, Capabilities: prepared.Capabilities,
-	}
-}
-
-func (persisted persistedMihomoPrepared) preparedCore() PreparedCore {
-	return PreparedCore{
-		Engine: persisted.Engine, BinaryPath: persisted.BinaryPath,
-		SourceConfigPath: persisted.SourceConfigPath, RuntimeConfigPath: persisted.RuntimeConfigPath,
-		HomeDir: persisted.HomeDir, Args: append([]string(nil), persisted.Args...), Env: append([]string(nil), persisted.Env...),
-		Capture: persisted.Capture, Controller: persisted.Controller, Capabilities: persisted.Capabilities,
-		runtimeConfigRoot: persisted.RuntimeConfigRoot, runtimeConfigOwnedPath: persisted.RuntimeConfigPath,
-	}
-}
-
-func (d *MihomoDriver) writeProcessState(pid int, identity string, startedAt time.Time, launchArgs []string, prepared PreparedCore) error {
-	if d.processStatePath == "" {
-		return nil
-	}
-	data, err := json.MarshalIndent(persistedMihomoProcess{
-		Version: persistedMihomoProcessVersion, PID: pid, Identity: identity,
-		StartedAt: startedAt, LaunchArgs: append([]string(nil), launchArgs...), Prepared: persistedPreparedCore(prepared),
-	}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode Mihomo process state: %w", err)
-	}
-	data = append(data, '\n')
-	if err := state.WriteFileAtomic(d.processStatePath, data, 0o600); err != nil {
-		return fmt.Errorf("persist Mihomo process state: %w", err)
-	}
-	return nil
-}
-
-func (d *MihomoDriver) readProcessState() (persistedMihomoProcess, error) {
-	if d.processStatePath == "" {
-		return persistedMihomoProcess{}, os.ErrNotExist
-	}
-	info, err := os.Lstat(d.processStatePath)
-	if err != nil {
-		return persistedMihomoProcess{}, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() > maxControllerResponse {
-		return persistedMihomoProcess{}, errors.New("mihomo process state is not a private regular file")
-	}
-	content, err := os.ReadFile(d.processStatePath)
-	if err != nil {
-		return persistedMihomoProcess{}, err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(content))
-	decoder.DisallowUnknownFields()
-	var persisted persistedMihomoProcess
-	if err := decoder.Decode(&persisted); err != nil {
-		return persistedMihomoProcess{}, fmt.Errorf("decode Mihomo process state: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return persistedMihomoProcess{}, errors.New("decode Mihomo process state: trailing data")
-	}
-	if persisted.Version != persistedMihomoProcessVersion || persisted.PID <= 1 || persisted.Identity == "" || persisted.StartedAt.IsZero() {
-		return persistedMihomoProcess{}, errors.New("mihomo process state is invalid")
-	}
-	return persisted, nil
-}
-
-func (d *MihomoDriver) removeProcessState() {
-	if d.processStatePath == "" {
-		return
-	}
-	if info, err := os.Lstat(d.processStatePath); err == nil && info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
-		_ = os.Remove(d.processStatePath)
-	}
-}
-
 // Adopt takes supervision of the exact still-running Mihomo process recorded
 // by a previous manager. PID reuse, executable substitution, changed argv, and
 // non-private runtime state are all rejected before any in-memory state changes.
 func (d *MihomoDriver) Adopt(ctx context.Context) (PreparedCore, HealthStatus, error) {
-	if err := ctx.Err(); err != nil {
-		return PreparedCore{}, HealthStatus{}, err
-	}
-	persisted, err := d.readProcessState()
+	prepared, err := d.supervisor.Adopt(ctx)
 	if err != nil {
 		return PreparedCore{}, HealthStatus{}, err
 	}
-	prepared := persisted.Prepared.preparedCore()
-	if err := validatePreparedMihomo(prepared); err != nil {
-		return PreparedCore{}, HealthStatus{}, err
-	}
-	if err := validatePersistedProcess(persisted.PID, persisted.Identity, prepared.BinaryPath, persisted.LaunchArgs); err != nil {
-		return PreparedCore{}, HealthStatus{}, err
-	}
-	d.mu.Lock()
-	if d.pid != 0 {
-		d.mu.Unlock()
-		return PreparedCore{}, HealthStatus{}, ErrAlreadyRunning
-	}
-	d.pid = persisted.PID
-	d.processIdentity = persisted.Identity
-	d.launchArgs = append([]string(nil), persisted.LaunchArgs...)
-	d.prepared = clonePreparedCore(prepared)
-	d.startedAt = persisted.StartedAt
-	d.lastExitError = ""
-	d.mu.Unlock()
-	d.emitLog("supervisor", fmt.Sprintf("Mihomo process %d adopted from the previous boxctl manager", persisted.PID))
-	d.startControllerLogPump(prepared.Controller)
-	go d.reapAdoptedChild(persisted.PID, persisted.Identity, prepared)
 	health, healthErr := d.Health(ctx)
 	if healthErr != nil {
-		d.emitLog("supervisor", "adopted Mihomo readiness check: "+healthErr.Error())
+		d.supervisor.emitLog("supervisor", "adopted Mihomo readiness check: "+healthErr.Error())
 	}
 	return prepared, health, nil
 }
 
-func (d *MihomoDriver) reapAdoptedChild(pid int, identity string, prepared PreparedCore) {
-	reaped, err := waitAdoptedChild(pid)
-	if err != nil {
-		d.emitLog("supervisor", "could not wait for adopted Mihomo process: "+err.Error())
-		return
-	}
-	if !reaped {
-		return
-	}
-	d.mu.Lock()
-	if d.pid != pid || d.processIdentity != identity {
-		d.mu.Unlock()
-		return
-	}
-	d.pid = 0
-	d.processIdentity = ""
-	d.launchArgs = nil
-	d.prepared = PreparedCore{}
-	d.lastExitError = "adopted Mihomo process exited"
-	if d.logCancel != nil {
-		d.logCancel()
-		d.logCancel = nil
-	}
-	d.mu.Unlock()
-	d.removeProcessState()
-	removeMihomoRuntime(prepared)
-	d.emitLog("supervisor", "adopted Mihomo process exited")
-}
-
 func (d *MihomoDriver) Start(ctx context.Context, prepared PreparedCore) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := d.Validate(ctx, prepared); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	d.mu.Lock()
-	if d.pid != 0 {
-		d.mu.Unlock()
-		return ErrAlreadyRunning
-	}
-	args := append([]string(nil), prepared.Args...)
-	if len(args) == 0 {
-		args = []string{"-d", prepared.HomeDir, "-f", prepared.RuntimeConfigPath}
-	}
-	cmd := exec.Command(prepared.BinaryPath, args...)
-	cmd.Dir = prepared.HomeDir
-	cmd.Env = append(os.Environ(), prepared.Env...)
-	cmd.SysProcAttr = childProcessAttributes(d.processStatePath != "")
-	var stdout, stderr *lineLogWriter
-	if d.processStatePath == "" {
-		stdout = &lineLogWriter{driver: d, stream: "stdout"}
-		stderr = &lineLogWriter{driver: d, stream: "stderr"}
-		cmd.Stdout = stdout
-		cmd.Stderr = stderr
-	} else {
-		// These descriptors belong to the stable service logger, not to a pipe
-		// drained by this manager process, so Mihomo survives manager replacement.
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-	}
-	process, err := startChildProcess(cmd)
-	if err != nil {
-		d.mu.Unlock()
-		return fmt.Errorf("start Mihomo: %w", err)
-	}
-	done := make(chan struct{})
-	d.cmd = cmd
-	d.pid = cmd.Process.Pid
-	d.done = done
-	d.prepared = clonePreparedCore(prepared)
-	d.startedAt = time.Now().UTC()
-	d.launchArgs = append([]string(nil), args...)
-	d.lastExitError = ""
-	if d.processStatePath != "" {
-		identity, identityErr := captureProcessIdentity(cmd.Process.Pid)
-		if identityErr != nil {
-			d.cmd, d.pid, d.done = nil, 0, nil
-			d.prepared = PreparedCore{}
-			d.launchArgs = nil
-			d.mu.Unlock()
-			_ = signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
-			_ = process.Wait()
-			return fmt.Errorf("identify Mihomo process: %w", identityErr)
-		}
-		d.processIdentity = identity
-		if stateErr := d.writeProcessState(cmd.Process.Pid, identity, d.startedAt, args, prepared); stateErr != nil {
-			d.cmd, d.pid, d.done = nil, 0, nil
-			d.processIdentity = ""
-			d.prepared = PreparedCore{}
-			d.launchArgs = nil
-			d.mu.Unlock()
-			_ = signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
-			_ = process.Wait()
-			return stateErr
-		}
-	}
-	d.mu.Unlock()
-
-	d.emitLog("supervisor", fmt.Sprintf("Mihomo started with pid %d", cmd.Process.Pid))
-	go d.waitProcess(cmd, process, done, stdout, stderr)
-	if d.processStatePath != "" {
-		d.startControllerLogPump(prepared.Controller)
-	}
-	return nil
-}
-
-func clonePreparedCore(prepared PreparedCore) PreparedCore {
-	prepared.Args = append([]string(nil), prepared.Args...)
-	prepared.Env = append([]string(nil), prepared.Env...)
-	prepared.Capture.FakeIPRanges = append([]netip.Prefix(nil), prepared.Capture.FakeIPRanges...)
-	prepared.Capture.Destinations.CIDRs = append([]netip.Prefix(nil), prepared.Capture.Destinations.CIDRs...)
-	prepared.Capture.EndpointBypassCIDRs = append([]netip.Prefix(nil), prepared.Capture.EndpointBypassCIDRs...)
-	return prepared
-}
-
-func (d *MihomoDriver) waitProcess(cmd *exec.Cmd, process *startedProcess, done chan struct{}, stdout, stderr *lineLogWriter) {
-	err := process.Wait()
-	if stdout != nil {
-		stdout.Flush()
-	}
-	if stderr != nil {
-		stderr.Flush()
-	}
-	var finished PreparedCore
-	d.mu.Lock()
-	if d.cmd == cmd {
-		finished = d.prepared
-		d.cmd = nil
-		d.pid = 0
-		d.processIdentity = ""
-		d.launchArgs = nil
-		d.done = nil
-		d.prepared = PreparedCore{}
-		if d.logCancel != nil {
-			d.logCancel()
-			d.logCancel = nil
-		}
-		if err != nil {
-			d.lastExitError = err.Error()
-		}
-	}
-	d.mu.Unlock()
-	d.removeProcessState()
-	removeMihomoRuntime(finished)
-	close(done)
-	if err != nil {
-		d.emitLog("supervisor", "Mihomo exited: "+err.Error())
-	} else {
-		d.emitLog("supervisor", "Mihomo exited")
-	}
+	return d.supervisor.Start(ctx, prepared)
 }
 
 func (d *MihomoDriver) Stop(ctx context.Context) error {
-	d.mu.RLock()
-	pid := d.pid
-	identity := d.processIdentity
-	done := d.done
-	prepared := clonePreparedCore(d.prepared)
-	d.mu.RUnlock()
-	if pid == 0 {
-		return nil
-	}
-
-	if err := signalProcessGroup(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("terminate Mihomo process group: %w", err)
-	}
-	timer := time.NewTimer(d.stopTimeout)
-	defer timer.Stop()
-	waitExited := func() bool {
-		if done != nil {
-			select {
-			case <-done:
-				return true
-			default:
-				return false
-			}
-		}
-		return !persistedProcessAlive(pid, identity)
-	}
-	finishAdopted := func() {
-		if done != nil {
-			return
-		}
-		d.mu.Lock()
-		if d.pid == pid && d.processIdentity == identity {
-			d.pid = 0
-			d.processIdentity = ""
-			d.launchArgs = nil
-			d.prepared = PreparedCore{}
-			if d.logCancel != nil {
-				d.logCancel()
-				d.logCancel = nil
-			}
-		}
-		d.mu.Unlock()
-		d.removeProcessState()
-		removeMihomoRuntime(prepared)
-	}
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	killed := false
-	for {
-		if waitExited() {
-			finishAdopted()
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			_ = signalProcessGroup(pid, syscall.SIGKILL)
-			return ctx.Err()
-		case <-timer.C:
-			if killed {
-				return errors.New("mihomo process did not exit after SIGKILL")
-			}
-			d.emitLog("supervisor", "Mihomo did not stop after SIGTERM; sending SIGKILL")
-			if err := signalProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-				return fmt.Errorf("kill Mihomo process group: %w", err)
-			}
-			killed = true
-			timer.Reset(2 * time.Second)
-		case <-ticker.C:
-		}
-	}
-}
-
-func signalProcessGroup(pid int, signal syscall.Signal) error {
-	if pid <= 1 {
-		return fmt.Errorf("refusing to signal unsafe process group %d", pid)
-	}
-	return syscall.Kill(-pid, signal)
+	return d.supervisor.Stop(ctx)
 }
 
 func (d *MihomoDriver) Reload(ctx context.Context, prepared PreparedCore) error {
 	if !prepared.Capabilities.Supports(CapabilityHotReload) {
 		return unsupported(CapabilityHotReload)
 	}
-	d.mu.RLock()
-	running := d.pid != 0
-	d.mu.RUnlock()
-	if !running {
+	pid, _, _, _, _ := d.supervisor.snapshot()
+	if pid == 0 {
 		return ErrNotRunning
 	}
 	if err := d.Validate(ctx, prepared); err != nil {
@@ -743,20 +360,12 @@ func (d *MihomoDriver) Reload(ctx context.Context, prepared PreparedCore) error 
 	if err := controller.Reload(ctx, prepared.RuntimeConfigPath); err != nil {
 		return err
 	}
-	d.mu.Lock()
-	if d.pid == 0 {
-		d.mu.Unlock()
-		return ErrNotRunning
-	}
-	previous := d.prepared
-	d.prepared = clonePreparedCore(prepared)
-	persistErr := d.writeProcessState(d.pid, d.processIdentity, d.startedAt, d.launchArgs, prepared)
-	d.mu.Unlock()
+	previous, persistErr := d.supervisor.replacePrepared(prepared)
 	if persistErr != nil {
 		return persistErr
 	}
 	removeMihomoRuntime(previous)
-	d.emitLog("supervisor", "Mihomo configuration hot-reloaded")
+	d.supervisor.emitLog("supervisor", "Mihomo configuration hot-reloaded")
 	return nil
 }
 
@@ -766,9 +375,14 @@ func (d *MihomoDriver) Reload(ctx context.Context, prepared PreparedCore) error 
 func CleanupPreparedRuntime(prepared PreparedCore) {
 	path := filepath.Clean(prepared.RuntimeConfigPath)
 	root := filepath.Clean(prepared.runtimeConfigRoot)
-	ownedPath := filepath.Clean(prepared.runtimeConfigOwnedPath)
-	if path == "." || root == "." || ownedPath == "." || path != ownedPath || path == filepath.Clean(prepared.SourceConfigPath) ||
-		filepath.Dir(path) != root || !strings.HasPrefix(filepath.Base(path), "mihomo-") || filepath.Ext(path) != ".yaml" {
+	owned := false
+	switch prepared.Engine {
+	case "", mihomoEngineName:
+		owned = runtimeFileOwnedBy(prepared, "mihomo-", ".yaml")
+	case SingBoxEngineName:
+		owned = runtimeFileOwnedBy(prepared, "sing-box-", ".json")
+	}
+	if !owned {
 		return
 	}
 	rootInfo, err := os.Lstat(root)
@@ -794,13 +408,7 @@ func removeMihomoRuntime(prepared PreparedCore) { CleanupPreparedRuntime(prepare
 
 func (d *MihomoDriver) Health(ctx context.Context) (HealthStatus, error) {
 	now := time.Now().UTC()
-	d.mu.RLock()
-	pid := d.pid
-	identity := d.processIdentity
-	prepared := clonePreparedCore(d.prepared)
-	startedAt := d.startedAt
-	lastExit := d.lastExitError
-	d.mu.RUnlock()
+	pid, identity, prepared, startedAt, lastExit := d.supervisor.snapshot()
 	status := HealthStatus{CheckedAt: now, StartedAt: startedAt, LastExitError: lastExit}
 	if pid == 0 || (identity != "" && !persistedProcessAlive(pid, identity)) {
 		return status, nil
@@ -842,103 +450,57 @@ func (d *MihomoDriver) Version(ctx context.Context, binaryPath string) (string, 
 }
 
 func (d *MihomoDriver) Logs() <-chan LogEntry {
-	return d.logs
+	return d.supervisor.Logs()
 }
 
-func (d *MihomoDriver) emitLog(stream, message string) {
-	entry := LogEntry{
-		Sequence: d.sequence.Add(1),
-		Time:     time.Now().UTC(),
-		Stream:   stream,
-		Message:  message,
-	}
-	select {
-	case d.logs <- entry:
-	default:
-	}
-}
-
-func (d *MihomoDriver) startControllerLogPump(endpoint ControllerEndpoint) {
-	d.mu.Lock()
-	if d.logCancel != nil {
-		d.logCancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	d.logCancel = cancel
-	d.mu.Unlock()
-	go func() {
-		for {
-			if err := ctx.Err(); err != nil {
-				return
-			}
-			controller, err := NewMihomoController(endpoint, d.httpClient)
+func (d *MihomoDriver) controllerLogPump(ctx context.Context, prepared PreparedCore, emit func(string, string)) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		controller, err := NewMihomoController(prepared.Controller, d.httpClient)
+		if err == nil {
+			var stream <-chan MihomoLog
+			stream, err = controller.StreamLogs(ctx)
 			if err == nil {
-				var stream <-chan MihomoLog
-				stream, err = controller.StreamLogs(ctx)
-				if err == nil {
-					for entry := range stream {
-						level := strings.ToLower(strings.TrimSpace(entry.Level))
-						message := strings.TrimSpace(entry.Message)
-						if message != "" {
-							if level != "" {
-								message = "level=" + level + " " + message
-							}
-							d.emitLog("stdout", message)
-						}
-						if ctx.Err() != nil {
-							return
-						}
+				for entry := range stream {
+					emitControllerLog(ctx, entry, emit)
+					if ctx.Err() != nil {
+						return
 					}
 				}
 			}
-			timer := time.NewTimer(time.Second)
-			select {
-			case <-ctx.Done():
-				if !timer.Stop() {
-					<-timer.C
-				}
-				return
-			case <-timer.C:
-			}
 		}
-	}()
-}
-
-type lineLogWriter struct {
-	driver *MihomoDriver
-	stream string
-	mu     sync.Mutex
-	buffer []byte
-}
-
-func (w *lineLogWriter) Write(data []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.buffer = append(w.buffer, data...)
-	for {
-		index := bytes.IndexByte(w.buffer, '\n')
-		if index < 0 {
-			break
+		if !waitLogReconnect(ctx) {
+			return
 		}
-		line := strings.TrimSuffix(string(w.buffer[:index]), "\r")
-		w.buffer = w.buffer[index+1:]
-		w.driver.emitLog(w.stream, line)
 	}
-	if len(w.buffer) > maxCommandOutput {
-		w.driver.emitLog(w.stream, string(w.buffer[:maxCommandOutput])+"…")
-		w.buffer = w.buffer[:0]
-	}
-	return len(data), nil
 }
 
-func (w *lineLogWriter) Flush() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if len(w.buffer) == 0 {
+func emitControllerLog(ctx context.Context, entry MihomoLog, emit func(string, string)) {
+	if ctx.Err() != nil {
 		return
 	}
-	w.driver.emitLog(w.stream, strings.TrimSuffix(string(w.buffer), "\r"))
-	w.buffer = nil
+	level := strings.ToLower(strings.TrimSpace(entry.Level))
+	message := strings.TrimSpace(entry.Message)
+	if message == "" {
+		return
+	}
+	if level != "" {
+		message = "level=" + level + " " + message
+	}
+	emit("stdout", message)
+}
+
+func waitLogReconnect(ctx context.Context) bool {
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 type limitedOutput struct {
@@ -1007,11 +569,8 @@ func unsupported(capability Capability) error {
 }
 
 func (d *MihomoDriver) controller(capability Capability) (*MihomoController, error) {
-	d.mu.RLock()
-	running := d.pid != 0
-	prepared := clonePreparedCore(d.prepared)
-	d.mu.RUnlock()
-	if !running {
+	pid, _, prepared, _, _ := d.supervisor.snapshot()
+	if pid == 0 {
 		return nil, ErrNotRunning
 	}
 	if !prepared.Capabilities.Supports(capability) {
@@ -1024,12 +583,7 @@ func (d *MihomoDriver) controller(capability Capability) (*MihomoController, err
 // for trusted in-process adapters such as the authenticated external-dashboard
 // proxy. Callers must never serialize the returned Secret or put it in a URL.
 func (d *MihomoDriver) ActiveControllerEndpoint() (ControllerEndpoint, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	if d.pid == 0 {
-		return ControllerEndpoint{}, ErrNotRunning
-	}
-	return d.prepared.Controller, nil
+	return d.supervisor.ActiveControllerEndpoint()
 }
 
 func (d *MihomoDriver) Proxies(ctx context.Context) ([]Proxy, error) {
@@ -1153,8 +707,7 @@ func (d *MihomoDriver) StreamTraffic(ctx context.Context) (<-chan TrafficSnapsho
 }
 
 var (
-	_ Config    = (*MihomoDriver)(nil)
-	_ Runtime   = (*MihomoDriver)(nil)
-	_ Control   = (*MihomoDriver)(nil)
-	_ io.Writer = (*lineLogWriter)(nil)
+	_ Config  = (*MihomoDriver)(nil)
+	_ Runtime = (*MihomoDriver)(nil)
+	_ Control = (*MihomoDriver)(nil)
 )

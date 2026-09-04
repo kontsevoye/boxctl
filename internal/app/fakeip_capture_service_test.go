@@ -293,7 +293,7 @@ func TestFakeIPWhitelistServiceUpdateRestartsRunningLifecycle(t *testing.T) {
 	if !document.Applied || document.RestartRequired {
 		t.Fatalf("updated document was not applied = %#v", document)
 	}
-	wantEvents := []string{"gateway-deactivate", "core-stop", "prepare", "core-start", "health", "gateway-activate"}
+	wantEvents := []string{"gateway-deactivate", "core-stop", "prepare", "core-start", "health", "gateway-activate", "health"}
 	if got := runtime.recordedEvents(); !reflect.DeepEqual(got, wantEvents) {
 		t.Fatalf("restart events = %v, want %v", got, wantEvents)
 	}
@@ -354,7 +354,7 @@ func TestFakeIPWhitelistServiceRegenerateRestartsAndReturnsFinalDocument(t *test
 	if !document.Applied || document.RestartRequired {
 		t.Fatalf("regenerated document was not applied = %#v", document)
 	}
-	wantEvents := []string{"gateway-deactivate", "core-stop", "prepare", "core-start", "health", "gateway-activate"}
+	wantEvents := []string{"gateway-deactivate", "core-stop", "prepare", "core-start", "health", "gateway-activate", "health"}
 	if got := runtime.recordedEvents(); !reflect.DeepEqual(got, wantEvents) {
 		t.Fatalf("restart events = %v, want %v", got, wantEvents)
 	}

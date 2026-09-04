@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontsevoye/boxctl/internal/state"
 	"github.com/kontsevoye/boxctl/internal/web"
 )
 
@@ -204,22 +206,181 @@ func TestProfilesServiceRejectsRemoteIntervalOutsideOneTo168Hours(t *testing.T) 
 	}
 }
 
-func TestProfilesServiceStoresFutureSingBoxButCannotActivate(t *testing.T) {
+func TestProfilesServiceActivatesSingBoxThroughProfileSwitcher(t *testing.T) {
 	service, err := NewProfilesService(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := service.CreateProfile(context.Background(), web.ProfileDraft{Name: "future", Engine: "sing-box", Content: `{"log":{"level":"info"}}`})
+	content := []byte(`{"log":{"level":"info"}}`)
+	var switched state.ActiveProfile
+	var switchedRevision string
+	service.SwitchProfile = func(ctx context.Context, target state.ActiveProfile, confirmed bool) error {
+		if confirmed {
+			t.Fatal("stopped profile activation unexpectedly required restart confirmation")
+		}
+		source, err := service.Store.Get(target)
+		if err != nil {
+			return err
+		}
+		switched = target
+		switchedRevision = contentRevision(source)
+		if err := service.Store.Activate(ctx, target); err != nil {
+			return err
+		}
+		return service.Revisions.MarkAppliedRevision(ctx, target, switchedRevision)
+	}
+	created, err := service.CreateProfile(context.Background(), web.ProfileDraft{Name: "future", Engine: "sing-box", Content: string(content)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if created.Engine != "sing-box" {
 		t.Fatalf("created = %+v", created)
 	}
-	_, err = service.ActivateProfile(context.Background(), created.ID)
-	var public *web.PublicError
-	if !errors.As(err, &public) || public.Code != "engine_unavailable" {
-		t.Fatalf("activate error = %v", err)
+	wantTarget := state.ActiveProfile{Name: "future", Engine: state.EngineSingBox}
+	storedContent, err := service.Store.Get(wantTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRevision := contentRevision(storedContent)
+	activated, err := service.ActivateProfile(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if switched != wantTarget || switchedRevision != wantRevision {
+		t.Fatalf("switch target = %+v at %q, want %+v at %q", switched, switchedRevision, wantTarget, wantRevision)
+	}
+	if !activated.Active {
+		t.Fatalf("activated = %+v", activated)
+	}
+	revision, exists, err := service.Revisions.Snapshot(wantTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || revision.AppliedRevision != wantRevision || revision.PendingRevision != "" {
+		t.Fatalf("revision snapshot = %+v, exists = %t", revision, exists)
+	}
+}
+
+func TestProfilesServiceRollsBackActiveSingBoxWhenPendingRevisionCannotBeRecorded(t *testing.T) {
+	service, err := NewProfilesService(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := "{\"log\":{\"level\":\"info\"}}\n"
+	created, err := service.CreateProfile(context.Background(), web.ProfileDraft{
+		Name: "sing", Engine: state.EngineSingBox, Content: original,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := state.ActiveProfile{Name: "sing", Engine: state.EngineSingBox}
+	if err := service.Store.Activate(context.Background(), profile); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Revisions.MarkAppliedRevision(context.Background(), profile, contentRevision([]byte(original))); err != nil {
+		t.Fatal(err)
+	}
+	pendingErr := errors.New("pending registry unavailable")
+	service.OnPending = func(context.Context, state.ActiveProfile, string) error { return pendingErr }
+	replacement := "{\"log\":{\"level\":\"debug\"}}"
+	if _, err := service.UpdateProfile(context.Background(), created.ID, web.ProfilePatch{Content: &replacement}); !errors.Is(err, pendingErr) {
+		t.Fatalf("UpdateProfile() error = %v", err)
+	}
+	content, err := service.Store.Get(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != original {
+		t.Fatalf("profile content = %q, want rollback to %q", content, original)
+	}
+	mirror, err := os.ReadFile(service.Store.Layout.SingBoxConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(mirror) != original {
+		t.Fatalf("active mirror = %q, want rollback to %q", mirror, original)
+	}
+	revision, pending, err := service.Revisions.Pending(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending || revision.AppliedRevision != contentRevision([]byte(original)) {
+		t.Fatalf("revision state = %+v pending=%t", revision, pending)
+	}
+}
+
+func TestProfilesServiceRefreshRollsBackActiveSingBoxWhenPendingRevisionCannotBeRecorded(t *testing.T) {
+	var version atomic.Int32
+	version.Store(1)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("ETag", fmt.Sprintf(`"v%d"`, version.Load()))
+		level := "info"
+		if version.Load() == 2 {
+			level = "debug"
+		}
+		_, _ = fmt.Fprintf(response, `{"log":{"level":%q}}`, level)
+	}))
+	defer server.Close()
+
+	service, err := NewProfilesService(t.TempDir(), server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.CreateProfile(context.Background(), web.ProfileDraft{
+		Name: "sing", Engine: state.EngineSingBox, SourceURL: server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := state.ActiveProfile{Name: "sing", Engine: state.EngineSingBox}
+	if err := service.Store.Activate(context.Background(), profile); err != nil {
+		t.Fatal(err)
+	}
+	original, err := service.Store.Get(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Revisions.MarkAppliedRevision(context.Background(), profile, contentRevision(original)); err != nil {
+		t.Fatal(err)
+	}
+	originalSource, err := service.loadSource(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingErr := errors.New("pending registry unavailable")
+	service.OnPending = func(context.Context, state.ActiveProfile, string) error { return pendingErr }
+
+	version.Store(2)
+	if _, err := service.RefreshProfile(context.Background(), created.ID); !errors.Is(err, pendingErr) {
+		t.Fatalf("RefreshProfile() error = %v", err)
+	}
+	content, err := service.Store.Get(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(original) {
+		t.Fatalf("profile content = %q, want rollback to %q", content, original)
+	}
+	mirror, err := os.ReadFile(service.Store.Layout.SingBoxConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(mirror) != string(original) {
+		t.Fatalf("active mirror = %q, want rollback to %q", mirror, original)
+	}
+	refreshedSource, err := service.loadSource(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshedSource.ETag != originalSource.ETag || refreshedSource.Fingerprint != originalSource.Fingerprint {
+		t.Fatalf("source metadata = %+v, want rollback to %+v", refreshedSource, originalSource)
+	}
+	revision, pending, err := service.Revisions.Pending(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending || revision.AppliedRevision != contentRevision(original) {
+		t.Fatalf("revision state = %+v pending=%t", revision, pending)
 	}
 }
 

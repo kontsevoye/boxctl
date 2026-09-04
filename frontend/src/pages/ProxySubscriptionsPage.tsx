@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { APIError, request } from '../api'
 import { Badge, Empty, ErrorPanel, formatBytes, formatDate, Loading } from '../components/Common'
+import { resourcesForEngine } from '../engines'
 import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
-import type { ProxySubscription } from '../types'
+import type { EngineInfo, ProxySubscription } from '../types'
 
 type HeaderField = 'userAgent' | 'hwid' | 'deviceOS' | 'versionOS' | 'deviceModel'
 type HeaderValues = Record<HeaderField, string>
@@ -27,7 +28,7 @@ export function subscriptionRequestHeaders(values: HeaderValues): Record<string,
   return result
 }
 
-export function ProxySubscriptionsPage() {
+export function ProxySubscriptionsPage({ engine }: { engine?: EngineInfo }) {
   const { locale, t } = useI18n()
   const query = useQuery<ProxySubscription[]>('/proxy-subscriptions')
   const [name, setName] = useState('')
@@ -52,7 +53,7 @@ export function ProxySubscriptionsPage() {
     try {
       await request('/proxy-subscriptions', {
         method: 'POST',
-        body: JSON.stringify({ name, ...(sourceKind === 'remote' && interval !== '' ? { updateIntervalHours: interval } : {}), headers: customHeaders, ...(sourceKind === 'remote' ? { sourceUrl: source } : { shareLinks: source }) }),
+        body: JSON.stringify({ name, ...(engine ? { engine: engine.id } : {}), ...(sourceKind === 'remote' && interval !== '' ? { updateIntervalHours: interval } : {}), headers: customHeaders, ...(sourceKind === 'remote' ? { sourceUrl: source } : { shareLinks: source }) }),
       })
       setName(''); setSource(''); setInterval(''); setHeaders(emptyHeaders())
       query.reload()
@@ -105,6 +106,8 @@ export function ProxySubscriptionsPage() {
     }
   }
 
+  const subscriptions = resourcesForEngine(query.data, engine?.id)
+
   return <>
     {error && <ErrorPanel error={error} />}
     <section className="du-card panel subscription-create-panel">
@@ -120,8 +123,8 @@ export function ProxySubscriptionsPage() {
     </section>
     {query.loading && !query.data && <Loading />}
     {query.error && <ErrorPanel error={query.error} onRetry={query.reload} />}
-    {query.data && query.data.length === 0 && <Empty />}
-    {query.data && <div className="card-list">{query.data.map((item) => <article className="du-card profile-card subscription-card" key={item.id}>
+    {subscriptions && subscriptions.length === 0 && <Empty />}
+    {subscriptions && <div className="card-list">{subscriptions.map((item) => <article className="du-card profile-card subscription-card" key={item.id}>
       <div className="profile-main">
         <div className="title-row"><h2>{item.name}</h2><Badge>{item.sourceKind}</Badge><Badge tone={item.enabled ? 'good' : 'warning'}>{item.enabled ? t('enabled') : t('disabled')}</Badge></div>
         <dl className="inline-details">

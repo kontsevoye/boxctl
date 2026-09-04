@@ -173,6 +173,100 @@ func TestMihomoUpdateStatusAndCleanInstallWithoutProfile(t *testing.T) {
 	}
 }
 
+func TestMihomoUpdateLeavesRunningSingBoxUntouched(t *testing.T) {
+	root := t.TempDir()
+	layout, err := state.NewLayout(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(layout.EnginesDir, state.EngineMihomo, state.EngineMihomo)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("Mihomo Meta v1.19.29\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := state.NewProfileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := state.ActiveProfile{Name: "selected", Engine: state.EngineSingBox}
+	if err := profiles.Create(context.Background(), selected, []byte("{}\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.Activate(context.Background(), selected); err != nil {
+		t.Fatal(err)
+	}
+	fake := &lifecycleFake{health: engine.HealthStatus{Running: true, ControllerReady: true, PID: 42}}
+	lifecycle := &Lifecycle{
+		Preparer: fake, Core: fake, Activation: fake,
+		snap: LifecycleSnapshot{
+			State:    LifecycleRunning,
+			Prepared: engine.PreparedCore{Engine: state.EngineSingBox, BinaryPath: "/managed/sing-box"},
+			Health:   engine.HealthStatus{Running: true, ControllerReady: true, PID: 42},
+		},
+	}
+	service := &MihomoUpdateService{
+		Preparer: &ActiveMihomoPreparer{Layout: layout, Profiles: profiles}, Lifecycle: lifecycle,
+		Versioner: fileVersioner{}, State: store, Source: updateSourceFake{release: testMihomoRelease()},
+		Installer: updateInstallerFake{content: []byte("Mihomo Meta v1.19.30\n")},
+		install:   update.Install, rollback: update.Rollback,
+	}
+
+	result, err := service.InstallCoreUpdate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Restarted {
+		t.Fatalf("inactive Mihomo update restarted the selected engine: %+v", result)
+	}
+	snapshot := lifecycle.Snapshot()
+	if snapshot.State != LifecycleRunning || snapshot.Prepared.Engine != state.EngineSingBox || !snapshot.Health.Running {
+		t.Fatalf("running sing-box changed during inactive Mihomo update: %+v", snapshot)
+	}
+	fake.mu.Lock()
+	events := append([]string(nil), fake.events...)
+	fake.mu.Unlock()
+	if len(events) != 0 {
+		t.Fatalf("inactive Mihomo update touched the running lifecycle: %v", events)
+	}
+	assertUpdateFile(t, target, "Mihomo Meta v1.19.30\n")
+}
+
+func TestStagedMihomoValidatorChecksOnlyBinaryWhenSingBoxIsSelected(t *testing.T) {
+	root := t.TempDir()
+	profiles, err := state.NewProfileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := state.ActiveProfile{Name: "selected", Engine: state.EngineSingBox}
+	if err := profiles.Create(context.Background(), selected, []byte("{}\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.Activate(context.Background(), selected); err != nil {
+		t.Fatal(err)
+	}
+	versionCalls := 0
+	validator := &stagedMihomoValidator{
+		Preparer: &ActiveMihomoPreparer{Profiles: profiles},
+		Versioner: coreVersionerFunc(func(context.Context, string) (string, error) {
+			versionCalls++
+			return "Mihomo Meta v1.19.30", nil
+		}),
+	}
+
+	if err := validator.ValidateBinary(context.Background(), "/staged/mihomo"); err != nil {
+		t.Fatal(err)
+	}
+	if versionCalls != 1 {
+		t.Fatalf("staged binary version checks = %d, want 1", versionCalls)
+	}
+}
+
 func TestMihomoUpdateRollsBackWhenNewCoreCannotStart(t *testing.T) {
 	root := t.TempDir()
 	layout, err := state.NewLayout(root)

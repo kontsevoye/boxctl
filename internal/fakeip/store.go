@@ -144,6 +144,32 @@ func (s *Store) ReplaceGeneratedWithScope(prefixes []netip.Prefix, revision stri
 	if revision == "" || revision != current.Revision {
 		return Document{}, ErrConflict
 	}
+	next, err := replacedGeneratedDocument(current, prefixes, generatedAt, scope)
+	if err != nil {
+		return Document{}, err
+	}
+	return s.commitUnlocked(next.Content, current.Revision)
+}
+
+// PreviewReplaceGeneratedWithScope computes the exact document which a
+// ReplaceGeneratedWithScope call would publish, without changing the shared
+// whitelist. It is used by runtime preflight paths which need the candidate
+// capture policy before a surrounding transaction is durable.
+func (s *Store) PreviewReplaceGeneratedWithScope(prefixes []netip.Prefix, revision string, generatedAt time.Time, scope string) (Document, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	current, err := s.readUnlocked()
+	if err != nil {
+		return Document{}, err
+	}
+	if revision == "" || revision != current.Revision {
+		return Document{}, ErrConflict
+	}
+	return replacedGeneratedDocument(current, prefixes, generatedAt, scope)
+}
+
+func replacedGeneratedDocument(current Document, prefixes []netip.Prefix, generatedAt time.Time, scope string) (Document, error) {
 	if len(prefixes) > MaxEntries {
 		return Document{}, ErrTooManyEntries
 	}
@@ -167,7 +193,7 @@ func (s *Store) ReplaceGeneratedWithScope(prefixes []netip.Prefix, revision stri
 	if sections.hasGenerated {
 		next = sections.before + block + sections.after
 	}
-	return s.commitUnlocked(next, current.Revision)
+	return parseDocument(next)
 }
 
 func (s *Store) readUnlocked() (Document, error) {

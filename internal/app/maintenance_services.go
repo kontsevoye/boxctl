@@ -14,8 +14,10 @@ import (
 
 	"github.com/kontsevoye/boxctl/internal/backup"
 	configpkg "github.com/kontsevoye/boxctl/internal/config"
+	"github.com/kontsevoye/boxctl/internal/engine"
 	"github.com/kontsevoye/boxctl/internal/fakeip"
 	"github.com/kontsevoye/boxctl/internal/rulelist"
+	"github.com/kontsevoye/boxctl/internal/state"
 	"github.com/kontsevoye/boxctl/internal/web"
 )
 
@@ -37,7 +39,9 @@ func (service RuleListService) RuleLists(ctx context.Context) ([]web.RuleList, e
 		if configErr != nil {
 			return nil, configErr
 		}
-		configContent = []byte(document.Content)
+		if rawConfigIsMihomo(document) {
+			configContent = []byte(document.Content)
+		}
 	}
 	result := make([]web.RuleList, 0, len(items))
 	for _, item := range items {
@@ -75,16 +79,24 @@ func (service RuleListService) RuleList(ctx context.Context, id string) (web.Rul
 		if configErr != nil {
 			return web.RuleListDocument{}, configErr
 		}
-		binding, bindingErr := configpkg.InspectLocalRuleListBinding([]byte(document.Content), item.Name)
-		if bindingErr != nil {
-			return web.RuleListDocument{}, bindingErr
+		if rawConfigIsMihomo(document) {
+			binding, bindingErr := configpkg.InspectLocalRuleListBinding([]byte(document.Content), item.Name)
+			if bindingErr != nil {
+				return web.RuleListDocument{}, bindingErr
+			}
+			applyRuleListBinding(&result.RuleList, binding)
 		}
-		applyRuleListBinding(&result.RuleList, binding)
 	}
 	return result, nil
 }
 
 func (service RuleListService) CreateRuleList(_ context.Context, draft web.RuleListDraft) (web.RuleListDocument, error) {
+	if normalizedEngine(draft.Engine) != state.EngineMihomo {
+		return web.RuleListDocument{}, &web.PublicError{
+			Status: http.StatusConflict, Code: "rule_list_engine_unsupported",
+			Message: "Managed local rule lists are not supported by this engine; use native sing-box rule_set entries",
+		}
+	}
 	if isReservedRuleListName(draft.Name) {
 		return web.RuleListDocument{}, reservedRuleListError()
 	}
@@ -137,14 +149,16 @@ func (service RuleListService) UpdateRuleList(ctx context.Context, id string, up
 			if configErr != nil {
 				return web.RuleListDocument{}, configErr
 			}
-			binding, bindingErr := configpkg.InspectLocalRuleListBinding([]byte(document.Content), item.Name)
-			if bindingErr != nil {
-				return web.RuleListDocument{}, bindingErr
-			}
-			applyRuleListBinding(&result.RuleList, binding)
-			if binding.InConfig && service.Config.OnReload != nil {
-				if _, reloadErr := service.Config.OnReload(ctx); reloadErr != nil {
-					return web.RuleListDocument{}, fmt.Errorf("rule list was saved but core reload failed: %w", reloadErr)
+			if rawConfigIsMihomo(document) {
+				binding, bindingErr := configpkg.InspectLocalRuleListBinding([]byte(document.Content), item.Name)
+				if bindingErr != nil {
+					return web.RuleListDocument{}, bindingErr
+				}
+				applyRuleListBinding(&result.RuleList, binding)
+				if binding.InConfig && service.Config.OnReload != nil {
+					if _, reloadErr := service.Config.OnReload(ctx); reloadErr != nil {
+						return web.RuleListDocument{}, fmt.Errorf("rule list was saved but core reload failed: %w", reloadErr)
+					}
 				}
 			}
 		}
@@ -180,20 +194,22 @@ func (service RuleListService) DeleteRuleList(ctx context.Context, id, revision 
 		if err != nil {
 			return err
 		}
-		updated, binding, mutationErr := configpkg.RemoveLocalRuleProvider([]byte(original.Content), current.Name)
-		if mutationErr != nil {
-			return mutationErr
-		}
-		if binding.InUse {
-			return &web.PublicError{Status: http.StatusConflict, Code: "rule_list_in_use", Message: "Remove RULE-SET references from the active configuration before deleting this list"}
-		}
-		if !bytes.Equal(updated, []byte(original.Content)) {
-			saved, err = service.Config.SaveRawConfig(ctx, web.RawConfigUpdate{Content: string(updated), Revision: original.Revision, Apply: configApplyReload})
-			if err != nil {
-				rollbackErr := rollbackRuleListConfig(ctx, service.Config, original, updated)
-				return errors.Join(err, rollbackErr)
+		if rawConfigIsMihomo(original) {
+			updated, binding, mutationErr := configpkg.RemoveLocalRuleProvider([]byte(original.Content), current.Name)
+			if mutationErr != nil {
+				return mutationErr
 			}
-			configChanged = true
+			if binding.InUse {
+				return &web.PublicError{Status: http.StatusConflict, Code: "rule_list_in_use", Message: "Remove RULE-SET references from the active configuration before deleting this list"}
+			}
+			if !bytes.Equal(updated, []byte(original.Content)) {
+				saved, err = service.Config.SaveRawConfig(ctx, web.RawConfigUpdate{Content: string(updated), Revision: original.Revision, Apply: configApplyReload})
+				if err != nil {
+					rollbackErr := rollbackRuleListConfig(ctx, service.Config, original, updated)
+					return errors.Join(err, rollbackErr)
+				}
+				configChanged = true
+			}
 		}
 	}
 	if err := service.Store.Delete(current.Name, current.Revision); err != nil {
@@ -217,6 +233,12 @@ func (service RuleListService) AddRuleListToConfig(ctx context.Context, id strin
 	document, err := service.Config.RawConfig(ctx)
 	if err != nil {
 		return web.RuleListDocument{}, err
+	}
+	if !rawConfigIsMihomo(document) {
+		return web.RuleListDocument{}, &web.PublicError{
+			Status: http.StatusConflict, Code: "rule_list_engine_mismatch",
+			Message: "This local rule list belongs to Mihomo and cannot be attached to the selected engine",
+		}
 	}
 	updated, binding, err := configpkg.InsertLocalRuleProvider([]byte(document.Content), item.Name)
 	if err != nil {
@@ -276,6 +298,10 @@ func applyRuleListBinding(item *web.RuleList, binding configpkg.LocalRuleListBin
 	item.InUse = binding.InUse
 }
 
+func rawConfigIsMihomo(document web.RawConfigDocument) bool {
+	return document.Engine == "" || document.Engine == state.EngineMihomo
+}
+
 func isReservedRuleListName(name string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	return normalized == fakeIPWhitelistRuleListName || normalized == strings.ToLower(fakeip.FileName)
@@ -291,7 +317,7 @@ func reservedRuleListError() error {
 
 func webRuleList(item rulelist.Item, content string) web.RuleList {
 	result := web.RuleList{
-		ID: item.Name, Name: item.Name, Format: "text", Enabled: true,
+		ID: item.Name, Engine: state.EngineMihomo, Name: item.Name, Format: "text", Enabled: true,
 		RuleCount: countRules(content), Revision: item.Revision,
 	}
 	if providerName, err := configpkg.LocalRuleProviderName(item.Name); err == nil {
@@ -444,7 +470,7 @@ func (service BackupService) ImportBackup(ctx context.Context, archive web.Backu
 		}
 	}
 
-	restored := false
+	var transaction *backup.RestoreTransaction
 	operationErr := func() (err error) {
 		var unlock func() error
 		if service.LockImport != nil {
@@ -460,35 +486,296 @@ func (service BackupService) ImportBackup(ctx context.Context, archive web.Backu
 		if service.CanImport != nil && !service.CanImport() {
 			return &web.PublicError{Status: http.StatusConflict, Code: "service_not_stopped", Message: "Selective routing could not be stopped safely for restore"}
 		}
-		if err := service.Manager.Restore(ctx, path); err != nil {
+		transaction, err = service.Manager.BeginRestore(ctx, path)
+		if err != nil {
 			return fmt.Errorf("restore backup: %w", err)
 		}
-		restored = true
 		return nil
 	}()
 
-	var restartErr error
-	if wasRunning {
-		resumeContext, cancelResume := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-		restartErr = service.StartCore(resumeContext)
-		cancelResume()
-	}
-	if !restored {
+	if transaction == nil {
+		var restartErr error
+		if wasRunning {
+			resumeContext, cancelResume := backupRecoveryContext()
+			restartErr = service.StartCore(resumeContext)
+			cancelResume()
+		}
 		return web.BackupImportResult{}, errors.Join(operationErr, restartErr)
 	}
-	result = web.BackupImportResult{Imported: true, CoreRestarted: wasRunning && restartErr == nil}
+
+	if wasRunning {
+		resumeContext, cancelResume := backupRecoveryContext()
+		restartErr := service.StartCore(resumeContext)
+		cancelResume()
+		if restartErr != nil {
+			rolledBack, rollbackErr := rollbackBackupImport(service, transaction)
+			var recoveryStopErr error
+			if !rolledBack && errors.Is(rollbackErr, errBackupRollbackUnsafe) && service.StopCore != nil {
+				// A failed start may retain a prepared/running generation when
+				// gateway cleanup or process termination was uncertain. Give the
+				// lifecycle one detached cleanup attempt, then re-check ownership
+				// before deciding that the previous state cannot yet be restored.
+				recoveryContext, cancelRecovery := backupRecoveryContext()
+				recoveryStopErr = service.StopCore(recoveryContext)
+				cancelRecovery()
+				if recoveryStopErr == nil {
+					rolledBack, rollbackErr = rollbackBackupImport(service, transaction)
+				}
+			}
+			if rolledBack {
+				recoveryContext, cancelRecovery := backupRecoveryContext()
+				restartPreviousErr := service.StartCore(recoveryContext)
+				cancelRecovery()
+				return web.BackupImportResult{}, errors.Join(
+					operationErr,
+					fmt.Errorf("restored selection failed readiness and was rolled back: %w", restartErr),
+					wrapUpdateError("finalize restored-state rollback", rollbackErr),
+					wrapUpdateError("stop uncertain restored runtime", recoveryStopErr),
+					wrapUpdateError("restart previous selection", restartPreviousErr),
+				)
+			}
+			if rollbackErr != nil && !errors.Is(rollbackErr, errBackupRollbackUnsafe) {
+				return web.BackupImportResult{}, errors.Join(operationErr, restartErr, rollbackErr, recoveryStopErr)
+			}
+			result = web.BackupImportResult{Imported: true, RestartRequired: true}
+			result.Warnings = append(result.Warnings,
+				"Backup restored, but selective routing could not be restarted or rolled back safely",
+				"The previous state was retained in protected recovery staging; stop the core and inspect or recover that staging before another restore",
+			)
+			if operationErr != nil || rollbackErr != nil || recoveryStopErr != nil {
+				result.Warnings = append(result.Warnings, "Backup restore finalization reported an error; inspect system logs before retrying")
+			}
+			return result, nil
+		}
+		result.CoreRestarted = true
+	}
+
+	commitErr := transaction.Commit()
+	result.Imported = true
 	if operationErr != nil {
 		result.Warnings = append(result.Warnings, "Backup restored, but finalization reported an error")
 	}
-	if restartErr != nil {
-		result.RestartRequired = true
-		result.Warnings = append(result.Warnings, "Backup restored, but selective routing could not be restarted")
+	if commitErr != nil {
+		result.Warnings = append(result.Warnings, "Backup restored, but rollback staging cleanup failed")
 	}
 	return result, nil
 }
 
+var errBackupRollbackUnsafe = errors.New("restored state cannot be rolled back while runtime ownership is uncertain")
+
+func rollbackBackupImport(service BackupService, transaction *backup.RestoreTransaction) (rolledBack bool, returnErr error) {
+	ctx, cancel := backupRecoveryContext()
+	defer cancel()
+	var unlock func() error
+	if service.LockImport != nil {
+		var err error
+		unlock, err = service.LockImport(ctx)
+		if err != nil {
+			return false, errors.Join(errBackupRollbackUnsafe, err)
+		}
+		if unlock == nil {
+			return false, errors.Join(errBackupRollbackUnsafe, errors.New("backup import lock returned no release function"))
+		}
+		defer func() { returnErr = errors.Join(returnErr, unlock()) }()
+	}
+	if service.CanImport != nil && !service.CanImport() {
+		return false, errBackupRollbackUnsafe
+	}
+	if err := transaction.Rollback(); err != nil {
+		if transaction.PreviousStateRestored() {
+			return true, fmt.Errorf("rollback restored state and failed to clean staging: %w", err)
+		}
+		return false, fmt.Errorf("rollback restored state: %w", err)
+	}
+	return transaction.PreviousStateRestored(), nil
+}
+
+func backupRecoveryContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 2*time.Minute)
+}
+
 func DefaultBackupManager(root string) backup.Manager {
-	return backup.Manager{Root: root, BackupDir: filepath.Join(root, "backups"), MaxFiles: 10_000, MaxFileSize: 32 << 20, MaxExpandedSize: 128 << 20, MaxArchiveSize: 32 << 20}
+	manager := backup.Manager{Root: root, BackupDir: filepath.Join(root, "backups"), MaxFiles: 10_000, MaxFileSize: 32 << 20, MaxExpandedSize: 128 << 20, MaxArchiveSize: 32 << 20}
+	manager.RestorePreflight = func(ctx context.Context, payloadRoot string, manifest backup.Manifest) error {
+		return validateRestoredActiveConfig(ctx, root, payloadRoot, manifest)
+	}
+	return manager
+}
+
+// validateRestoredActiveConfig always executes native validation for the
+// restored selection before any current state is replaced. Exact schema-2
+// requirements select their immutable binary; conventional Mihomo and custom
+// sing-box installations use the currently installed local executable.
+func validateRestoredActiveConfig(ctx context.Context, installedRoot, payloadRoot string, manifest backup.Manifest) error {
+	if manifest.Schema != backup.CurrentManifestSchema {
+		return nil
+	}
+	profiles, err := state.NewProfileStore(payloadRoot)
+	if err != nil {
+		return err
+	}
+	selected := state.ActiveProfile{Engine: state.EngineMihomo}
+	hasActive := false
+	if active, activeErr := profiles.Current(); activeErr == nil {
+		selected = active
+		hasActive = true
+	} else if !errors.Is(activeErr, fs.ErrNotExist) {
+		return fmt.Errorf("read restored active profile: %w", activeErr)
+	}
+	if !hasActive && selected.Engine == state.EngineMihomo {
+		layout, layoutErr := state.NewLayout(payloadRoot)
+		if layoutErr != nil {
+			return layoutErr
+		}
+		if _, configErr := os.Lstat(layout.MihomoConfig); errors.Is(configErr, fs.ErrNotExist) {
+			return nil
+		} else if configErr != nil {
+			return fmt.Errorf("inspect restored Mihomo config: %w", configErr)
+		}
+	}
+	requirement, binary, err := restoredEngineBinary(installedRoot, selected.Engine, manifest)
+	if err != nil {
+		return err
+	}
+
+	switch selected.Engine {
+	case state.EngineMihomo:
+		return validateRestoredMihomo(ctx, payloadRoot, profiles, selected, hasActive, binary, requirement.Version)
+	case state.EngineSingBox:
+		return validateRestoredSingBox(ctx, payloadRoot, profiles, selected, binary, requirement.Version)
+	default:
+		return fmt.Errorf("restored active profile uses unsupported engine %q", selected.Engine)
+	}
+}
+
+func restoredEngineBinary(root, engineName string, manifest backup.Manifest) (backup.EngineRequirement, string, error) {
+	var matched backup.EngineRequirement
+	found := false
+	for _, requirement := range manifest.Engines {
+		if requirement.Engine != engineName {
+			continue
+		}
+		matched, found = requirement, true
+		if requirement.Version == "" {
+			break
+		}
+		engineRoot := filepath.Join(root, "engines", engineName)
+		binary := filepath.Join(engineRoot, filepath.FromSlash(requirement.Binary))
+		relative, err := filepath.Rel(engineRoot, binary)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return backup.EngineRequirement{}, "", errors.New("restored engine binary path escapes its engine root")
+		}
+		return requirement, binary, nil
+	}
+	if manifest.Schema == backup.CurrentManifestSchema && !found {
+		return backup.EngineRequirement{}, "", fmt.Errorf("restored configuration has no requirement for engine %s", engineName)
+	}
+	layout, err := state.NewLayout(root)
+	if err != nil {
+		return backup.EngineRequirement{}, "", err
+	}
+	var binary string
+	switch engineName {
+	case state.EngineMihomo:
+		binary = filepath.Join(layout.EnginesDir, state.EngineMihomo, state.EngineMihomo)
+	case state.EngineSingBox:
+		binary, _, err = resolveSingBoxBinary(layout)
+		if err != nil {
+			return backup.EngineRequirement{}, "", fmt.Errorf("resolve installed sing-box for restore: %w", err)
+		}
+	default:
+		return backup.EngineRequirement{}, "", fmt.Errorf("restored active profile uses unsupported engine %q", engineName)
+	}
+	if !regularExecutable(binary) {
+		return backup.EngineRequirement{}, "", fmt.Errorf("compatible %s executable must be installed before restore", engineName)
+	}
+	return matched, binary, nil
+}
+
+func validateRestoredMihomo(ctx context.Context, payloadRoot string, profiles state.ProfileStore, selected state.ActiveProfile, hasActive bool, binary, expectedVersion string) error {
+	driver := engine.NewMihomoDriver(engine.MihomoOptions{})
+	version, err := driver.Version(ctx, binary)
+	if err != nil {
+		return fmt.Errorf("read required Mihomo version: %w", err)
+	}
+	actualVersion := strings.TrimPrefix(extractMihomoVersion(version), "v")
+	if actualVersion == "" || (expectedVersion != "" && actualVersion != expectedVersion) {
+		return errors.New("required Mihomo binary reports an unexpected version")
+	}
+	layout, err := state.NewLayout(payloadRoot)
+	if err != nil {
+		return err
+	}
+	// Match ActiveMihomoPreparer exactly: the activated config.yaml mirror is
+	// authoritative when present, including for a named active profile. A
+	// profile file is only the legacy fallback when the mirror is absent. Never
+	// inspect one generation for managed capture settings and ask Mihomo to
+	// validate another.
+	sourcePath := layout.MihomoConfig
+	if _, statErr := os.Lstat(sourcePath); errors.Is(statErr, fs.ErrNotExist) && hasActive {
+		sourcePath = filepath.Join(layout.ProfilesDir, state.ProfileConfigName(selected))
+	} else if statErr != nil {
+		return fmt.Errorf("inspect restored Mihomo config: %w", statErr)
+	}
+	content, err := readBoundedRegular(sourcePath, 32<<20)
+	if err != nil {
+		return fmt.Errorf("read restored Mihomo config: %w", err)
+	}
+	managed, err := configpkg.InspectMihomo(content)
+	if err != nil {
+		return fmt.Errorf("inspect restored Mihomo config: %w", err)
+	}
+	store, err := state.NewStore(payloadRoot)
+	if err != nil {
+		return err
+	}
+	settings, err := LoadRuntimeSettings(store)
+	if err != nil {
+		return fmt.Errorf("load restored settings: %w", err)
+	}
+	managedSettings, err := managedRuntimeSettings(managed)
+	if err != nil {
+		return err
+	}
+	capture, err := settings.CapturePlan(managedSettings)
+	if err != nil {
+		return err
+	}
+	prepared, err := driver.Prepare(ctx, engine.PrepareRequest{
+		BinaryPath: binary, SourceConfigPath: sourcePath, RuntimeDir: os.TempDir(),
+		HomeDir: payloadRoot, Capture: capture, Controller: managedMihomoController(managed),
+	})
+	defer engine.CleanupPreparedRuntime(prepared)
+	if err != nil {
+		return fmt.Errorf("validate restored Mihomo config: %w", err)
+	}
+	return nil
+}
+
+func validateRestoredSingBox(ctx context.Context, payloadRoot string, profiles state.ProfileStore, selected state.ActiveProfile, binary, expectedVersion string) error {
+	driver := engine.NewSingBoxDriver(engine.SingBoxOptions{})
+	version, err := driver.Version(ctx, binary)
+	if err != nil {
+		return fmt.Errorf("read required sing-box version: %w", err)
+	}
+	match := singBoxVersionLine.FindStringSubmatch(version)
+	if len(match) != 2 || (expectedVersion != "" && match[1] != expectedVersion) {
+		return errors.New("required sing-box binary reports an unexpected version")
+	}
+	content, err := profiles.Get(selected)
+	if err != nil {
+		return fmt.Errorf("read restored sing-box profile: %w", err)
+	}
+	preparer, err := NewActiveSingBoxPreparer(payloadRoot, driver)
+	if err != nil {
+		return err
+	}
+	preparer.BinaryOverride = binary
+	preparer.ControllerSecretOverride = "boxctl-read-only-validation-secret-000000000000"
+	if err := preparer.ValidateContent(ctx, content); err != nil {
+		return fmt.Errorf("validate restored sing-box config: %w", err)
+	}
+	return nil
 }
 
 var _ web.RuleListService = RuleListService{}

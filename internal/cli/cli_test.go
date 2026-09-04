@@ -11,11 +11,13 @@ import (
 )
 
 type actionRecorder struct {
-	called  string
-	serve   ServeOptions
-	doctor  DoctorOptions
-	hotplug HotplugOptions
-	update  SelfUpdateOptions
+	called        string
+	serve         ServeOptions
+	doctor        DoctorOptions
+	hotplug       HotplugOptions
+	update        SelfUpdateOptions
+	validate      ConfigValidateOptions
+	engineInstall EngineInstallOptions
 }
 
 func (r *actionRecorder) Serve(_ context.Context, options ServeOptions) error {
@@ -45,6 +47,14 @@ func (r *actionRecorder) Doctor(_ context.Context, options DoctorOptions) error 
 }
 func (r *actionRecorder) SelfUpdate(_ context.Context, options SelfUpdateOptions) error {
 	r.called, r.update = "self-update:"+options.Action, options
+	return nil
+}
+func (r *actionRecorder) ValidateEngineConfig(_ context.Context, options ConfigValidateOptions) error {
+	r.called, r.validate = "validate-engine:"+options.Engine, options
+	return nil
+}
+func (r *actionRecorder) InstallEngine(_ context.Context, options EngineInstallOptions) error {
+	r.called, r.engineInstall = "install-engine:"+options.Engine, options
 	return nil
 }
 
@@ -186,6 +196,98 @@ func TestTUNHotplugRequiresAndPassesReportedInterface(t *testing.T) {
 	if recorder.called != "hotplug:tun" || recorder.hotplug.Interface != "mihomo0" {
 		t.Fatalf("TUN hotplug invocation = %#v", recorder)
 	}
+}
+
+func TestEngineAwareConfigValidation(t *testing.T) {
+	t.Parallel()
+	recorder := &actionRecorder{}
+	if err := Execute(context.Background(), []string{"config", "validate", "--engine", "sing-box"}, Streams{}, recorder); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.called != "validate-engine:sing-box" || recorder.validate.File != state.DefaultRoot+"/config.json" {
+		t.Fatalf("sing-box validation = %#v", recorder)
+	}
+
+	recorder = &actionRecorder{}
+	if err := Execute(context.Background(), []string{"config", "validate", "--engine", "sing-box", "--file", "/tmp/profile.json"}, Streams{}, recorder); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.validate.File != "/tmp/profile.json" {
+		t.Fatalf("explicit validation file = %#v", recorder.validate)
+	}
+
+	for _, args := range [][]string{
+		{"config", "validate", "--engine", "unknown"},
+		{"config", "unknown"},
+	} {
+		recorder = &actionRecorder{}
+		err := Execute(context.Background(), args, Streams{}, recorder)
+		if !IsUsage(err) || recorder.called != "" {
+			t.Fatalf("Execute(%v) = %v, called %q", args, err, recorder.called)
+		}
+	}
+}
+
+func TestOfflineSingBoxEngineInstallParsing(t *testing.T) {
+	t.Parallel()
+	recorder := &actionRecorder{}
+	args := []string{"engine", "install", "sing-box", "--file", "/tmp/sing-box-1.14.0-linux-arm64-musl.tar.gz", "--sha256", strings.Repeat("a", 64), "--root", "/srv/boxctl"}
+	if err := Execute(context.Background(), args, Streams{}, recorder); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.called != "install-engine:sing-box" || recorder.engineInstall.Root != "/srv/boxctl" || recorder.engineInstall.File != args[4] || recorder.engineInstall.SHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("engine install = %#v", recorder.engineInstall)
+	}
+	for _, invalid := range [][]string{
+		{"engine"},
+		{"engine", "install"},
+		{"engine", "install", "mihomo", "--file", "/tmp/mihomo"},
+		{"engine", "install", "sing-box"},
+	} {
+		recorder = &actionRecorder{}
+		err := Execute(context.Background(), invalid, Streams{}, recorder)
+		if !IsUsage(err) || recorder.called != "" {
+			t.Fatalf("Execute(%v) = %v, called %q", invalid, err, recorder.called)
+		}
+	}
+}
+
+func TestOptionalEngineActionsFailClosedWhenApplicationIsLegacy(t *testing.T) {
+	t.Parallel()
+	legacy := &legacyActionRecorder{}
+	if err := Execute(context.Background(), []string{"config", "validate", "--engine", "sing-box"}, Streams{}, legacy); err == nil || !strings.Contains(err.Error(), "not wired") {
+		t.Fatalf("legacy sing-box validation error = %v", err)
+	}
+	if err := Execute(context.Background(), []string{"engine", "install", "sing-box", "--file", "/tmp/archive"}, Streams{}, legacy); err == nil || !strings.Contains(err.Error(), "not wired") {
+		t.Fatalf("legacy engine install error = %v", err)
+	}
+}
+
+type legacyActionRecorder actionRecorder
+
+func (r *legacyActionRecorder) Serve(ctx context.Context, options ServeOptions) error {
+	return (*actionRecorder)(r).Serve(ctx, options)
+}
+func (r *legacyActionRecorder) Firewall(ctx context.Context, action string) error {
+	return (*actionRecorder)(r).Firewall(ctx, action)
+}
+func (r *legacyActionRecorder) Hotplug(ctx context.Context, options HotplugOptions) error {
+	return (*actionRecorder)(r).Hotplug(ctx, options)
+}
+func (r *legacyActionRecorder) Cleanup(ctx context.Context) error {
+	return (*actionRecorder)(r).Cleanup(ctx)
+}
+func (r *legacyActionRecorder) SetPassword(ctx context.Context, in io.Reader, out io.Writer) error {
+	return (*actionRecorder)(r).SetPassword(ctx, in, out)
+}
+func (r *legacyActionRecorder) ValidateConfig(ctx context.Context, path string) error {
+	return (*actionRecorder)(r).ValidateConfig(ctx, path)
+}
+func (r *legacyActionRecorder) Doctor(ctx context.Context, options DoctorOptions) error {
+	return (*actionRecorder)(r).Doctor(ctx, options)
+}
+func (r *legacyActionRecorder) SelfUpdate(ctx context.Context, options SelfUpdateOptions) error {
+	return (*actionRecorder)(r).SelfUpdate(ctx, options)
 }
 
 func TestSelfUpdateCommandsAreExplicitlyParsed(t *testing.T) {

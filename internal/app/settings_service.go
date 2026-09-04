@@ -20,6 +20,7 @@ type SettingsService struct {
 	OnChanged          func(context.Context, bool) error
 	SetStartOnBoot     func(context.Context, bool) error
 	DiscoverInterfaces func(context.Context) (web.InterfaceCatalog, error)
+	SelectedEngine     func() string
 }
 
 func NewSettingsService(root string) (*SettingsService, error) {
@@ -64,6 +65,10 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 	applyBoolPatch(raw, "AUTO_DETECT_LAN", patch.AutoDetectLAN)
 	applyBoolPatch(raw, "INTERCEPT_ROUTER_OUTPUT", patch.InterceptRouterOutput)
 	applyStringPatch(raw, "TUN_STACK", patch.TUNStack)
+	applyStringPatchPreserveCase(raw, "SINGBOX_TUN_ADDRESS", patch.TUNAddress)
+	if patch.TUNMTU != nil {
+		raw["SINGBOX_TUN_MTU"] = strconv.FormatUint(uint64(*patch.TUNMTU), 10)
+	}
 	applyBoolPatch(raw, "BLOCK_QUIC", patch.RejectQUIC)
 	applyBoolPatch(raw, "AUTO_FAKEIP_WHITELIST", patch.AutoFakeIPWhitelist)
 	applyBoolPatch(raw, "AUTO_FAKEIP_INCLUDE_EXTERNAL_IP_PROVIDERS", patch.AutoFakeIPIncludeExternalIPProviders)
@@ -143,15 +148,24 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 		}
 		return web.Settings{}, err
 	}
+	selectedEngine := state.EngineMihomo
+	if service.SelectedEngine != nil {
+		selectedEngine = normalizedEngine(service.SelectedEngine())
+	}
 	restartRequired := current.CaptureMode != candidate.CaptureMode || current.DNSMode != candidate.DNSMode || current.TUNStack != candidate.TUNStack ||
 		current.OperatingMode != candidate.OperatingMode ||
 		current.InterfaceMode != candidate.InterfaceMode || current.AutoDetectWAN != candidate.AutoDetectWAN || current.AutoDetectLAN != candidate.AutoDetectLAN ||
 		current.InterceptOutput != candidate.InterceptOutput || !slices.Equal(current.Included, candidate.Included) || !slices.Equal(current.Excluded, candidate.Excluded) ||
 		current.RejectQUIC != candidate.RejectQUIC || !slices.Equal(current.ReservedNetworks, candidate.ReservedNetworks) || !slices.Equal(current.BypassSources, candidate.BypassSources) ||
 		!slices.Equal(current.BypassTCPPorts, candidate.BypassTCPPorts) || !slices.Equal(current.BypassUDPPorts, candidate.BypassUDPPorts) ||
-		!slices.Equal(current.ProxyTCPPorts, candidate.ProxyTCPPorts) || !slices.Equal(current.ProxyUDPPorts, candidate.ProxyUDPPorts) ||
-		current.AutoFakeIP != candidate.AutoFakeIP || current.AutoFakeIPIncludeExternalIPProviders != candidate.AutoFakeIPIncludeExternalIPProviders ||
-		current.UseTmpfsRules != candidate.UseTmpfsRules || current.EnableHWID != candidate.EnableHWID
+		!slices.Equal(current.ProxyTCPPorts, candidate.ProxyTCPPorts) || !slices.Equal(current.ProxyUDPPorts, candidate.ProxyUDPPorts)
+	if selectedEngine == state.EngineSingBox {
+		restartRequired = restartRequired || current.TUNAddress != candidate.TUNAddress || current.TUNMTU != candidate.TUNMTU
+	} else {
+		restartRequired = restartRequired || current.AutoFakeIP != candidate.AutoFakeIP ||
+			current.AutoFakeIPIncludeExternalIPProviders != candidate.AutoFakeIPIncludeExternalIPProviders ||
+			current.UseTmpfsRules != candidate.UseTmpfsRules || current.EnableHWID != candidate.EnableHWID
+	}
 	if service.OnChanged != nil {
 		if err := service.OnChanged(ctx, restartRequired); err != nil {
 			return web.Settings{}, fmt.Errorf("settings saved but runtime refresh failed: %w", err)
@@ -192,7 +206,7 @@ func runtimeSettingsWeb(settings RuntimeSettings) web.Settings {
 		DNSMode:       string(settings.DNSMode), InterfaceMode: settings.InterfaceMode,
 		AutoDetectWAN: settings.AutoDetectWAN, AutoDetectLAN: settings.AutoDetectLAN, InterceptRouterOutput: settings.InterceptOutput,
 		IncludedInterfaces: append([]string(nil), settings.Included...), ExcludedInterfaces: append([]string(nil), settings.Excluded...),
-		TUNStack: settings.TUNStack, RejectQUIC: settings.RejectQUIC,
+		TUNStack: settings.TUNStack, TUNAddress: settings.TUNAddress.String(), TUNMTU: settings.TUNMTU, RejectQUIC: settings.RejectQUIC,
 		ReservedNetworks: append([]string(nil), settings.ReservedNetworks...), BypassSources: append([]string(nil), settings.BypassSources...),
 		BypassTCPPorts: append([]uint16(nil), settings.BypassTCPPorts...), BypassUDPPorts: append([]uint16(nil), settings.BypassUDPPorts...),
 		ProxyOnlyTCPPorts: append([]uint16(nil), settings.ProxyTCPPorts...), ProxyOnlyUDPPorts: append([]uint16(nil), settings.ProxyUDPPorts...),
@@ -224,6 +238,12 @@ func invalidSetting(name string) error {
 func applyStringPatch(settings state.Settings, key string, value *string) {
 	if value != nil {
 		settings[key] = strings.ToLower(strings.TrimSpace(*value))
+	}
+}
+
+func applyStringPatchPreserveCase(settings state.Settings, key string, value *string) {
+	if value != nil {
+		settings[key] = strings.TrimSpace(*value)
 	}
 }
 

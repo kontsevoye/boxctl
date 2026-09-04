@@ -128,6 +128,12 @@ func (service *PeriodicMaintenance) Refresh(ctx context.Context, settings Runtim
 	if snapshot.State != LifecycleRunning {
 		return nil
 	}
+	if snapshot.Prepared.Engine != "" && snapshot.Prepared.Engine != state.EngineMihomo {
+		// The current dynamic-maintenance inputs are Mihomo YAML/provider
+		// semantics. sing-box endpoint sets are computed transactionally during
+		// native preparation instead of parsing them through this adapter.
+		return nil
+	}
 
 	source, err := service.source(snapshot)
 	if err != nil {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { copyRawConfig, normalizeRawConfigContent, rawConfigDocumentMatchesDraft, rawConfigFormatLabel, reconcileRawConfigAfterSave, shouldApplyRawConfigReload, shouldRecoverRawConfigSave } from './RawConfigPage'
+import { configFileAccept, copyRawConfig, normalizeRawConfigContent, rawConfigDocumentMatchesDraft, rawConfigFormatLabel, reconcileRawConfigAfterSave, selectConfigProfile, shouldApplyRawConfigReload, shouldRecoverRawConfigSave, shouldUseLegacyRawConfig } from './RawConfigPage'
 
 describe('raw configuration editor state', () => {
   it('accepts the initial document and clean background reloads', () => {
@@ -38,6 +38,34 @@ describe('raw configuration editor state', () => {
   it('falls back to YAML when older responses omit the format', () => {
     expect(rawConfigFormatLabel()).toBe('YAML')
     expect(rawConfigFormatLabel(' yaml ')).toBe('YAML')
+  })
+
+  it('prefers an explicit profile and otherwise opens the active one', () => {
+    const profiles = [
+      { id: 'one', name: 'One', engine: 'mihomo' as const, sourceKind: 'local', hasSource: false, sourceEnabled: false, active: false },
+      { id: 'two', name: 'Two', engine: 'sing-box' as const, sourceKind: 'local', hasSource: false, sourceEnabled: false, active: true },
+    ]
+    expect(selectConfigProfile(profiles, '')?.id).toBe('two')
+    expect(selectConfigProfile(profiles, 'one')?.id).toBe('one')
+  })
+
+  it('uses engine-native extensions for config import', () => {
+    expect(configFileAccept({ engine: 'sing-box' })).toContain('.json')
+    expect(configFileAccept({ configFormat: 'json', extensions: ['json'] })).toBe('.json,application/json,text/plain')
+  })
+
+  it('keeps the legacy config.yaml editor available when no profiles exist', () => {
+    expect(shouldUseLegacyRawConfig([], { id: 'mihomo' })).toBe(true)
+    expect(shouldUseLegacyRawConfig([], { id: 'sing-box' })).toBe(false)
+    expect(shouldUseLegacyRawConfig(undefined, { id: 'mihomo' })).toBe(false)
+  })
+
+  it('never aliases another engine profile through the legacy editor', () => {
+    const singProfile = [{
+      id: 'sing-box:active', name: 'active', engine: 'sing-box' as const,
+      sourceKind: 'local', hasSource: false, sourceEnabled: false, active: true,
+    }]
+    expect(shouldUseLegacyRawConfig(singProfile, { id: 'mihomo' })).toBe(false)
   })
 
   it('surfaces unavailable and rejected clipboard writes', async () => {

@@ -42,12 +42,16 @@ const defaultProfileUpdateIntervalHours = 24
 // ProfilesService adapts native profile files to the secret-free web API.
 // Source URLs live in private state and are never copied into Profile DTOs.
 type ProfilesService struct {
-	Store          state.ProfileStore
-	State          state.Store
-	Fetcher        remote.Fetcher
-	ValidateMihomo func(context.Context, []byte) error
-	OnActivated    func(context.Context) error
-	mutationMu     sync.Mutex
+	Store           state.ProfileStore
+	State           state.Store
+	Revisions       *ProfileRevisionStore
+	Fetcher         remote.Fetcher
+	ValidateMihomo  func(context.Context, []byte) error
+	ValidateSingBox func(context.Context, []byte) error
+	OnActivated     func(context.Context) error
+	SwitchProfile   func(context.Context, state.ActiveProfile, bool) error
+	OnPending       func(context.Context, state.ActiveProfile, string) error
+	mutationMu      sync.Mutex
 }
 
 func NewProfilesService(root string, client *http.Client) (*ProfilesService, error) {
@@ -59,7 +63,12 @@ func NewProfilesService(root string, client *http.Client) (*ProfilesService, err
 	if err != nil {
 		return nil, err
 	}
-	service := &ProfilesService{Store: profiles, State: store}
+	revisions, err := NewProfileRevisionStore(root)
+	if err != nil {
+		return nil, err
+	}
+	service := &ProfilesService{Store: profiles, State: store, Revisions: revisions}
+	service.OnPending = revisions.MarkPending
 	service.Fetcher = remote.Fetcher{Client: client, Validator: remote.ValidatorFunc(service.validateRemoteMihomo)}
 	return service, nil
 }
@@ -142,7 +151,10 @@ func (service *ProfilesService) UpdateProfile(ctx context.Context, id string, pa
 		newProfile.Name = strings.TrimSpace(*patch.Name)
 	}
 	if patch.Engine != nil {
-		newProfile.Engine = normalizedEngine(*patch.Engine)
+		requestedEngine := normalizedEngine(*patch.Engine)
+		if requestedEngine != oldProfile.Engine {
+			return web.Profile{}, &web.PublicError{Status: http.StatusConflict, Code: "profile_engine_immutable", Message: "Profile engine cannot be changed; create a new profile instead"}
+		}
 	}
 	active, activeErr := service.Store.Current()
 	if activeErr != nil && !errors.Is(activeErr, fs.ErrNotExist) {
@@ -220,6 +232,14 @@ func (service *ProfilesService) UpdateProfile(ctx context.Context, id string, pa
 		return web.Profile{}, publicInvalidProfile(err)
 	}
 	contentChanged := !bytes.Equal(oldContent, content)
+	var revisionBefore profileRevision
+	revisionExisted := false
+	if isActive && contentChanged && newProfile.Engine == state.EngineSingBox && service.Revisions != nil {
+		revisionBefore, revisionExisted, err = service.Revisions.Snapshot(oldProfile)
+		if err != nil {
+			return web.Profile{}, fmt.Errorf("snapshot profile revision state: %w", err)
+		}
+	}
 
 	if newProfile == oldProfile {
 		if err := service.Store.Update(ctx, oldProfile, content); err != nil {
@@ -251,7 +271,18 @@ func (service *ProfilesService) UpdateProfile(ctx context.Context, id string, pa
 			rollbackErr := service.rollbackProfileUpdate(oldProfile, newProfile, oldContent, id, oldSourceSnapshot, oldSourceExists, true)
 			return web.Profile{}, fmt.Errorf("publish active profile update: %w", errors.Join(err, rollbackErr))
 		}
-		if service.OnActivated != nil {
+		if newProfile.Engine == state.EngineSingBox {
+			if service.OnPending != nil {
+				if err := service.OnPending(ctx, newProfile, contentRevision(oldContent)); err != nil {
+					rollbackErr := service.rollbackProfileUpdate(oldProfile, newProfile, oldContent, id, oldSourceSnapshot, oldSourceExists, true)
+					var revisionErr error
+					if service.Revisions != nil {
+						revisionErr = service.Revisions.Restore(context.WithoutCancel(ctx), oldProfile, revisionBefore, revisionExisted)
+					}
+					return web.Profile{}, errors.Join(fmt.Errorf("record pending sing-box profile: %w", err), rollbackErr, revisionErr)
+				}
+			}
+		} else if service.OnActivated != nil {
 			if err := service.OnActivated(ctx); err != nil {
 				return web.Profile{}, fmt.Errorf("profile updated but runtime refresh failed: %w", err)
 			}
@@ -274,19 +305,24 @@ func (service *ProfilesService) DeleteProfile(ctx context.Context, id string) er
 		}
 		return err
 	}
-	return service.deleteSource(id)
+	var revisionErr error
+	if service.Revisions != nil {
+		revisionErr = service.Revisions.Remove(ctx, entry.ActiveProfile)
+	}
+	return errors.Join(service.deleteSource(id), revisionErr)
 }
 
 func (service *ProfilesService) ActivateProfile(ctx context.Context, id string) (web.Profile, error) {
+	return service.ActivateProfileWithRequest(ctx, id, web.ProfileActivationRequest{})
+}
+
+func (service *ProfilesService) ActivateProfileWithRequest(ctx context.Context, id string, request web.ProfileActivationRequest) (web.Profile, error) {
 	service.mutationMu.Lock()
 	defer service.mutationMu.Unlock()
 
 	entry, err := service.entry(id)
 	if err != nil {
 		return web.Profile{}, err
-	}
-	if entry.Engine != state.EngineMihomo {
-		return web.Profile{}, &web.PublicError{Status: http.StatusNotImplemented, Code: "engine_unavailable", Message: "The sing-box driver is not implemented in v1"}
 	}
 	content, err := service.Store.Get(entry.ActiveProfile)
 	if err != nil {
@@ -295,12 +331,23 @@ func (service *ProfilesService) ActivateProfile(ctx context.Context, id string) 
 	if err := service.validateContent(ctx, entry.Engine, content); err != nil {
 		return web.Profile{}, publicInvalidProfile(err)
 	}
-	if err := service.Store.Activate(ctx, entry.ActiveProfile); err != nil {
-		return web.Profile{}, err
+	if active, activeErr := service.Store.Current(); activeErr == nil && active == entry.ActiveProfile {
+		return service.Profile(ctx, id)
+	} else if activeErr != nil && !errors.Is(activeErr, fs.ErrNotExist) {
+		return web.Profile{}, activeErr
 	}
-	if service.OnActivated != nil {
-		if err := service.OnActivated(ctx); err != nil {
-			return web.Profile{}, fmt.Errorf("profile activated but runtime refresh failed: %w", err)
+	if service.SwitchProfile != nil {
+		if err := service.SwitchProfile(ctx, entry.ActiveProfile, request.ConfirmRestart); err != nil {
+			return web.Profile{}, err
+		}
+	} else {
+		if err := service.Store.Activate(ctx, entry.ActiveProfile); err != nil {
+			return web.Profile{}, err
+		}
+		if service.OnActivated != nil {
+			if err := service.OnActivated(ctx); err != nil {
+				return web.Profile{}, fmt.Errorf("profile activated but runtime refresh failed: %w", err)
+			}
 		}
 	}
 	return service.Profile(ctx, id)
@@ -323,10 +370,15 @@ func (service *ProfilesService) RefreshProfile(ctx context.Context, id string) (
 	if err != nil {
 		return web.Profile{}, err
 	}
+	sourceBefore := source
 	now := time.Now().UTC()
-	result, fetchErr := service.Fetcher.Fetch(ctx, remote.Request{
+	fetcher := service.Fetcher
+	fetcher.Validator = remote.ValidatorFunc(func(validateContext context.Context, content []byte) error {
+		return service.validateContent(validateContext, entry.Engine, content)
+	})
+	result, fetchErr := fetcher.Fetch(ctx, remote.Request{
 		URL: source.URL, ETag: source.ETag, LastModified: source.LastModified,
-		Headers: source.Headers, RemnawaveFallback: true,
+		Headers: source.Headers, RemnawaveFallback: entry.Engine == state.EngineMihomo,
 	})
 	if fetchErr != nil && ctx.Err() != nil {
 		return web.Profile{}, ctx.Err()
@@ -351,24 +403,53 @@ func (service *ProfilesService) RefreshProfile(ctx context.Context, id string) (
 			source.LastModified = result.LastModified
 		}
 	}
+	var (
+		oldContent       []byte
+		contentChanged   bool
+		active           bool
+		revisionBefore   profileRevision
+		revisionExisted  bool
+		revisionSnapshot bool
+	)
 	if !result.NotModified {
-		oldContent, readErr := service.Store.Get(entry.ActiveProfile)
+		var readErr error
+		oldContent, readErr = service.Store.Get(entry.ActiveProfile)
 		if readErr != nil {
 			return web.Profile{}, readErr
 		}
-		if err := service.Store.Update(ctx, entry.ActiveProfile, result.Content); err != nil {
-			return web.Profile{}, err
-		}
-		active, activeErr := service.Store.Current()
-		if activeErr == nil && active == entry.ActiveProfile {
-			if err := service.Store.Activate(ctx, entry.ActiveProfile); err != nil {
-				_ = service.Store.Update(context.Background(), entry.ActiveProfile, oldContent)
-				_ = service.Store.Activate(context.Background(), entry.ActiveProfile)
+		contentChanged = !bytes.Equal(oldContent, result.Content)
+		if contentChanged {
+			current, activeErr := service.Store.Current()
+			if activeErr != nil && !errors.Is(activeErr, fs.ErrNotExist) {
+				return web.Profile{}, fmt.Errorf("read active profile before refresh: %w", activeErr)
+			}
+			active = activeErr == nil && current == entry.ActiveProfile
+			if active && entry.Engine == state.EngineSingBox && service.Revisions != nil {
+				revisionBefore, revisionExisted, err = service.Revisions.Snapshot(entry.ActiveProfile)
+				if err != nil {
+					return web.Profile{}, fmt.Errorf("snapshot profile revision state: %w", err)
+				}
+				revisionSnapshot = true
+			}
+			if err := service.Store.Update(ctx, entry.ActiveProfile, result.Content); err != nil {
 				return web.Profile{}, err
 			}
-			if service.OnActivated != nil {
-				if err := service.OnActivated(ctx); err != nil {
-					return web.Profile{}, fmt.Errorf("profile refreshed but runtime refresh failed: %w", err)
+			if active {
+				if err := service.Store.Activate(ctx, entry.ActiveProfile); err != nil {
+					rollbackErr := service.rollbackProfileRefresh(entry.ActiveProfile, oldContent, id, sourceBefore, true, revisionBefore, revisionExisted, revisionSnapshot)
+					return web.Profile{}, errors.Join(err, rollbackErr)
+				}
+				if entry.Engine == state.EngineSingBox {
+					if service.OnPending != nil {
+						if err := service.OnPending(ctx, entry.ActiveProfile, contentRevision(oldContent)); err != nil {
+							rollbackErr := service.rollbackProfileRefresh(entry.ActiveProfile, oldContent, id, sourceBefore, true, revisionBefore, revisionExisted, revisionSnapshot)
+							return web.Profile{}, errors.Join(fmt.Errorf("record pending sing-box profile: %w", err), rollbackErr)
+						}
+					}
+				} else if service.OnActivated != nil {
+					if err := service.OnActivated(ctx); err != nil {
+						return web.Profile{}, fmt.Errorf("profile refreshed but runtime refresh failed: %w", err)
+					}
 				}
 			}
 		}
@@ -378,9 +459,31 @@ func (service *ProfilesService) RefreshProfile(ctx context.Context, id string) (
 		source.LastUpdatedAt = now
 	}
 	if err := service.saveSource(id, source); err != nil {
+		if contentChanged && (!active || entry.Engine == state.EngineSingBox) {
+			rollbackErr := service.rollbackProfileRefresh(entry.ActiveProfile, oldContent, id, sourceBefore, active, revisionBefore, revisionExisted, revisionSnapshot)
+			return web.Profile{}, errors.Join(err, rollbackErr)
+		}
 		return web.Profile{}, err
 	}
 	return service.Profile(ctx, id)
+}
+
+func (service *ProfilesService) rollbackProfileRefresh(
+	profile state.ActiveProfile,
+	oldContent []byte,
+	id string,
+	oldSource profileSource,
+	restoreActive bool,
+	revision profileRevision,
+	revisionExisted bool,
+	restoreRevision bool,
+) error {
+	rollbackErr := service.rollbackProfileUpdate(profile, profile, oldContent, id, oldSource, true, restoreActive)
+	if restoreRevision && service.Revisions != nil {
+		revisionErr := service.Revisions.Restore(context.Background(), profile, revision, revisionExisted)
+		rollbackErr = errors.Join(rollbackErr, revisionErr)
+	}
+	return rollbackErr
 }
 
 // DetachProfileSource keeps the last validated native profile and permanently
@@ -498,6 +601,22 @@ func (service *ProfilesService) webProfile(entry state.ProfileEntry, active stat
 	if info, err := os.Stat(entry.Path); err == nil {
 		result.UpdatedAt = info.ModTime().UTC()
 	}
+	if service.Revisions != nil {
+		if revision, pending, err := service.Revisions.Pending(entry.ActiveProfile); err == nil {
+			if revision.AppliedRevision != "" && revision.AppliedRevision != result.Fingerprint {
+				pending = true
+				if revision.PendingRevision == "" {
+					revision.PendingRevision = result.Fingerprint
+				}
+			}
+			result.AppliedRevision = revision.AppliedRevision
+			result.PendingRevision = revision.PendingRevision
+			result.PendingAt = revision.PendingAt
+			result.RestartRequired = result.Active && pending
+		} else if err != nil {
+			return web.Profile{}, err
+		}
+	}
 	if source, err := service.loadSource(result.ID); err == nil {
 		result.SourceKind = "remote"
 		result.HasSource = source.URL != ""
@@ -539,15 +658,16 @@ func (service *ProfilesService) resolveDraft(ctx context.Context, engineName, co
 	if sourceURL == "" {
 		return nil, nil, &web.PublicError{Status: http.StatusBadRequest, Code: "profile_source_required", Message: "Native profile content or an HTTPS source URL is required"}
 	}
-	if engineName != state.EngineMihomo {
-		return nil, nil, &web.PublicError{Status: http.StatusNotImplemented, Code: "remote_engine_unavailable", Message: "Remote sing-box profiles are not implemented in v1"}
-	}
 	if requestedInterval != nil {
 		if err := validateProfileInterval(*requestedInterval); err != nil {
 			return nil, nil, err
 		}
 	}
-	result, err := service.Fetcher.Fetch(ctx, remote.Request{URL: sourceURL, RemnawaveFallback: true})
+	fetcher := service.Fetcher
+	fetcher.Validator = remote.ValidatorFunc(func(validateContext context.Context, candidate []byte) error {
+		return service.validateContent(validateContext, engineName, candidate)
+	})
+	result, err := fetcher.Fetch(ctx, remote.Request{URL: sourceURL, RemnawaveFallback: engineName == state.EngineMihomo})
 	if err != nil {
 		return nil, nil, &web.PublicError{Status: http.StatusBadGateway, Code: "profile_fetch_failed", Message: "The remote native profile could not be downloaded and validated"}
 	}
@@ -591,6 +711,9 @@ func (service *ProfilesService) validateContent(ctx context.Context, engineName 
 		}
 		return nil
 	case state.EngineSingBox:
+		if service.ValidateSingBox != nil {
+			return service.ValidateSingBox(ctx, content)
+		}
 		decoder := json.NewDecoder(bytes.NewReader(content))
 		var document map[string]any
 		if err := decoder.Decode(&document); err != nil || document == nil {

@@ -17,7 +17,9 @@ type ActivePreparer interface {
 	PrepareActive(context.Context) (engine.PreparedCore, error)
 }
 
-// CoreRuntime is the supervised process subset used by Lifecycle.
+// CoreRuntime is the supervised process subset used by Lifecycle. A nil Start
+// transfers ownership of PreparedCore's private runtime to the implementation;
+// Stop releases it only after the process can no longer read it.
 type CoreRuntime interface {
 	Start(context.Context, engine.PreparedCore) error
 	Stop(context.Context) error
@@ -64,7 +66,7 @@ type Lifecycle struct {
 	// DNS transaction succeeds. A persistence failure is logged and leaves the
 	// runtime running; for the first-start marker this fails safely by keeping
 	// the next daemon launch in management-only mode.
-	OnStarted func() error
+	OnStarted func(engine.PreparedCore) error
 
 	PrepareTimeout     time.Duration
 	StartTimeout       time.Duration
@@ -137,7 +139,6 @@ func (lifecycle *Lifecycle) startLocked(ctx context.Context) error {
 	}
 	current := lifecycle.Snapshot()
 	if current.State == LifecycleRunning {
-		lifecycle.recordSuccessfulStart()
 		return nil
 	}
 	if current.State == LifecycleCleanupFailed {
@@ -160,6 +161,30 @@ func (lifecycle *Lifecycle) startLocked(ctx context.Context) error {
 	if err != nil {
 		return lifecycle.fail(fmt.Errorf("prepare active core: %w", err))
 	}
+	if err := lifecycle.startPreparedLocked(ctx, prepared); err != nil {
+		return err
+	}
+	lifecycle.recordSuccessfulStart(prepared)
+	return nil
+}
+
+// startPreparedLocked starts one already validated native generation. The
+// caller must hold opMu. It preserves the core -> readiness -> gateway order.
+func (lifecycle *Lifecycle) startPreparedLocked(ctx context.Context, prepared engine.PreparedCore) error {
+	return lifecycle.startPreparedLockedWithAcceptance(ctx, prepared, nil)
+}
+
+// startPreparedLockedWithAcceptance reports the exact point at which Core.Start
+// accepted ownership of the prepared runtime. Rollback callers need this
+// distinction: a clone which was never accepted remains caller-owned, while an
+// accepted clone must not be removed if later readiness or activation cleanup
+// leaves the core running.
+func (lifecycle *Lifecycle) startPreparedLockedWithAcceptance(
+	ctx context.Context,
+	prepared engine.PreparedCore,
+	onAccepted func(),
+) error {
+	lifecycle.setState(LifecycleStarting, "")
 	lifecycle.mu.Lock()
 	lifecycle.snap.Prepared = prepared
 	lifecycle.mu.Unlock()
@@ -173,6 +198,9 @@ func (lifecycle *Lifecycle) startLocked(ctx context.Context) error {
 		}
 		return lifecycle.failAfterRollback(errors.Join(fmt.Errorf("start core: %w", startErr), rollbackErr))
 	}
+	if onAccepted != nil {
+		onAccepted()
+	}
 	readyContext, cancelReady := context.WithTimeout(ctx, lifecycle.ReadyTimeout)
 	health, err := lifecycle.waitReady(readyContext, prepared)
 	cancelReady()
@@ -185,6 +213,19 @@ func (lifecycle *Lifecycle) startLocked(ctx context.Context) error {
 		rollbackErr := lifecycle.rollback(ctx, prepared)
 		return lifecycle.failAfterRollback(errors.Join(fmt.Errorf("activate gateway: %w", err), rollbackErr))
 	}
+	// Activation changes the packet path and, in upstream mode, points dnsmasq
+	// at the core. Probe the resulting generation again: a resolver which was
+	// healthy against the pre-activation system DNS can otherwise enter a loop
+	// only after the gateway transaction commits.
+	postActivateContext, cancelPostActivate := context.WithTimeout(ctx, lifecycle.ReadyTimeout)
+	postActivateHealth, postActivateErr := lifecycle.waitReady(postActivateContext, prepared)
+	cancelPostActivate()
+	lifecycle.recordHealth(postActivateHealth, postActivateErr)
+	if postActivateErr != nil {
+		rollbackErr := lifecycle.rollback(ctx, prepared)
+		return lifecycle.failAfterRollback(errors.Join(fmt.Errorf("core readiness failed after gateway activation: %w", postActivateErr), rollbackErr))
+	}
+	health = postActivateHealth
 	lifecycle.mu.Lock()
 	lifecycle.snap = LifecycleSnapshot{
 		State: LifecycleRunning, Prepared: prepared, Health: health,
@@ -192,21 +233,174 @@ func (lifecycle *Lifecycle) startLocked(ctx context.Context) error {
 	}
 	lifecycle.mu.Unlock()
 	lifecycle.Logger.Info("selective routing activated", "engine", prepared.Engine, "pid", health.PID)
-	lifecycle.recordSuccessfulStart()
 	return nil
 }
 
-func (lifecycle *Lifecycle) recordSuccessfulStart() {
+// SwitchPrepared atomically changes the live engine/profile generation. The
+// target must have been prepared before this call while the old selection was
+// still authoritative. commit persists the new active profile only after the
+// target core and dataplane are ready.
+func (lifecycle *Lifecycle) SwitchPrepared(ctx context.Context, target engine.PreparedCore, commit func() error) (bool, error) {
+	if commit == nil {
+		engine.CleanupPreparedRuntime(target)
+		return false, errors.New("profile switch commit is required")
+	}
+	if err := lifecycle.lockOperation(ctx); err != nil {
+		engine.CleanupPreparedRuntime(target)
+		return false, err
+	}
+	defer lifecycle.opMu.Unlock()
+	lifecycle.defaults()
+	if err := lifecycle.validate(); err != nil {
+		engine.CleanupPreparedRuntime(target)
+		return false, err
+	}
+	current := lifecycle.Snapshot()
+	if current.State != LifecycleRunning {
+		defer engine.CleanupPreparedRuntime(target)
+		if current.State == LifecycleCleanupFailed || current.State == LifecycleStarting || current.State == LifecycleStopping {
+			return false, errors.New("cannot change the selected profile during an incomplete lifecycle operation")
+		}
+		return false, commit()
+	}
+
+	rollbackPrepared, err := engine.ClonePreparedRuntime(current.Prepared)
+	if err != nil {
+		engine.CleanupPreparedRuntime(target)
+		return true, fmt.Errorf("clone live rollback generation: %w", err)
+	}
+	rollbackConsumed := false
+	defer func() {
+		if !rollbackConsumed {
+			engine.CleanupPreparedRuntime(rollbackPrepared)
+		}
+	}()
+
+	if err := lifecycle.stopLocked(ctx); err != nil {
+		engine.CleanupPreparedRuntime(target)
+		return true, fmt.Errorf("stop previous generation: %w", err)
+	}
+	if err := lifecycle.startPreparedLocked(ctx, target); err != nil {
+		recoveryContext, cancelRecovery := lifecycle.recoveryContext()
+		rollbackTransferred, restoreErr := lifecycle.restorePreparedAfterFailure(recoveryContext, rollbackPrepared)
+		rollbackConsumed = rollbackTransferred
+		cancelRecovery()
+		return true, errors.Join(fmt.Errorf("start target generation: %w", err), wrapLifecycleRollbackError(restoreErr))
+	}
+	if err := commit(); err != nil {
+		recoveryContext, cancelRecovery := lifecycle.recoveryContext()
+		defer cancelRecovery()
+		stopErr := lifecycle.stopLocked(recoveryContext)
+		var restoreErr error
+		if stopErr == nil {
+			rollbackConsumed, restoreErr = lifecycle.restorePreparedAfterFailure(recoveryContext, rollbackPrepared)
+		}
+		return true, errors.Join(fmt.Errorf("commit active profile: %w", err), stopErr, wrapLifecycleRollbackError(restoreErr))
+	}
+	lifecycle.recordSuccessfulStart(target)
+	return true, nil
+}
+
+// ReconfigurePrepared replaces the live generation while the selected profile
+// stays the same. It clones the actual private runtime before stopping it, so
+// a failed restart restores the exact previous generation without discarding
+// the newly saved (pending) source document.
+func (lifecycle *Lifecycle) ReconfigurePrepared(
+	ctx context.Context,
+	target engine.PreparedCore,
+	commit func() error,
+) (bool, error) {
+	if err := lifecycle.lockOperation(ctx); err != nil {
+		engine.CleanupPreparedRuntime(target)
+		return false, err
+	}
+	defer lifecycle.opMu.Unlock()
+	lifecycle.defaults()
+	if err := lifecycle.validate(); err != nil {
+		engine.CleanupPreparedRuntime(target)
+		return false, err
+	}
+	current := lifecycle.Snapshot()
+	if current.State != LifecycleRunning {
+		defer engine.CleanupPreparedRuntime(target)
+		if current.State == LifecycleCleanupFailed || current.State == LifecycleStarting || current.State == LifecycleStopping {
+			return false, errors.New("cannot reconfigure during an incomplete lifecycle operation")
+		}
+		if commit != nil {
+			return false, commit()
+		}
+		return false, nil
+	}
+	rollbackPrepared, err := engine.ClonePreparedRuntime(current.Prepared)
+	if err != nil {
+		engine.CleanupPreparedRuntime(target)
+		return true, fmt.Errorf("clone live rollback generation: %w", err)
+	}
+
+	rollbackConsumed := false
+	defer func() {
+		if !rollbackConsumed {
+			engine.CleanupPreparedRuntime(rollbackPrepared)
+		}
+	}()
+	if err := lifecycle.stopLocked(ctx); err != nil {
+		engine.CleanupPreparedRuntime(target)
+		return true, fmt.Errorf("stop previous generation: %w", err)
+	}
+	if err := lifecycle.startPreparedLocked(ctx, target); err != nil {
+		recoveryContext, cancelRecovery := lifecycle.recoveryContext()
+		rollbackTransferred, restoreErr := lifecycle.restorePreparedAfterFailure(recoveryContext, rollbackPrepared)
+		rollbackConsumed = rollbackTransferred
+		cancelRecovery()
+		return true, errors.Join(fmt.Errorf("start replacement generation: %w", err), wrapLifecycleRollbackError(restoreErr))
+	}
+	if commit == nil {
+		lifecycle.recordSuccessfulStart(target)
+		return true, nil
+	}
+	if err := commit(); err != nil {
+		recoveryContext, cancelRecovery := lifecycle.recoveryContext()
+		defer cancelRecovery()
+		stopErr := lifecycle.stopLocked(recoveryContext)
+		var restoreErr error
+		if stopErr == nil {
+			rollbackConsumed, restoreErr = lifecycle.restorePreparedAfterFailure(recoveryContext, rollbackPrepared)
+		}
+		return true, errors.Join(fmt.Errorf("commit replacement generation: %w", err), stopErr, wrapLifecycleRollbackError(restoreErr))
+	}
+	lifecycle.recordSuccessfulStart(target)
+	return true, nil
+}
+
+func (lifecycle *Lifecycle) restorePreparedAfterFailure(ctx context.Context, prepared engine.PreparedCore) (bool, error) {
+	failed := lifecycle.Snapshot()
+	if failed.State == LifecycleCleanupFailed || failed.Health.Running {
+		return false, errors.New("rollback start skipped because the failed target generation may still own the core or dataplane")
+	}
+	accepted := false
+	err := lifecycle.startPreparedLockedWithAcceptance(ctx, prepared, func() { accepted = true })
+	return accepted, err
+}
+
+func wrapLifecycleRollbackError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("restore previous generation: %w", err)
+}
+
+func (lifecycle *Lifecycle) recordSuccessfulStart(prepared engine.PreparedCore) {
 	if lifecycle.OnStarted == nil {
 		return
 	}
-	if err := lifecycle.OnStarted(); err != nil {
+	if err := lifecycle.OnStarted(cloneLifecyclePrepared(prepared)); err != nil {
 		lifecycle.Logger.Warn("could not persist successful lifecycle start; next daemon launch remains start-stopped", "error", err)
 	}
 }
 
 // Adopt records a core and dataplane generation that remained live across a
-// verified manager handoff. It deliberately does not reapply nftables or DNS.
+// verified manager handoff. It deliberately does not reapply nftables or DNS,
+// so callers must never use it for an unrequested manager crash.
 func (lifecycle *Lifecycle) Adopt(prepared engine.PreparedCore, health engine.HealthStatus) error {
 	lifecycle.defaults()
 	if err := lifecycle.validate(); err != nil {
@@ -225,10 +419,90 @@ func (lifecycle *Lifecycle) Adopt(prepared engine.PreparedCore, health engine.He
 	return nil
 }
 
+// RecoverAdopted accepts a process which survived an unrequested manager crash.
+// Unlike the verified handoff path, it rebuilds the exact adopted generation's
+// packet path and DNS ownership before reporting Running. Any failure follows
+// the normal fail-open rollback: activation is removed before the core stops,
+// while a failed cleanup keeps the core alive in CleanupFailed for retry.
+func (lifecycle *Lifecycle) RecoverAdopted(ctx context.Context, prepared engine.PreparedCore, health engine.HealthStatus) error {
+	if err := lifecycle.lockOperation(ctx); err != nil {
+		return err
+	}
+	defer lifecycle.opMu.Unlock()
+	lifecycle.defaults()
+	if err := lifecycle.validate(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	lifecycle.mu.Lock()
+	lifecycle.snap = LifecycleSnapshot{
+		State: LifecycleStarting, Prepared: cloneLifecyclePrepared(prepared), Health: health,
+		StartedAt: health.StartedAt, LastChecked: health.CheckedAt,
+	}
+	lifecycle.mu.Unlock()
+	if !health.Running || health.PID <= 1 {
+		rollbackErr := lifecycle.rollback(ctx, prepared)
+		return lifecycle.failAfterRollback(errors.Join(errors.New("cannot recover a core that is not running"), rollbackErr))
+	}
+
+	readyContext, cancelReady := context.WithTimeout(ctx, lifecycle.ReadyTimeout)
+	readyHealth, err := lifecycle.waitReady(readyContext, prepared)
+	cancelReady()
+	lifecycle.recordHealth(readyHealth, err)
+	if err != nil {
+		rollbackErr := lifecycle.rollback(ctx, prepared)
+		return lifecycle.failAfterRollback(errors.Join(fmt.Errorf("wait for adopted core readiness: %w", err), rollbackErr))
+	}
+	if err := lifecycle.Activation.Activate(ctx, prepared); err != nil {
+		rollbackErr := lifecycle.rollback(ctx, prepared)
+		return lifecycle.failAfterRollback(errors.Join(fmt.Errorf("activate adopted gateway: %w", err), rollbackErr))
+	}
+	postActivateContext, cancelPostActivate := context.WithTimeout(ctx, lifecycle.ReadyTimeout)
+	postActivateHealth, postActivateErr := lifecycle.waitReady(postActivateContext, prepared)
+	cancelPostActivate()
+	lifecycle.recordHealth(postActivateHealth, postActivateErr)
+	if postActivateErr != nil {
+		rollbackErr := lifecycle.rollback(ctx, prepared)
+		return lifecycle.failAfterRollback(errors.Join(fmt.Errorf("adopted core readiness failed after gateway activation: %w", postActivateErr), rollbackErr))
+	}
+	lifecycle.mu.Lock()
+	lifecycle.snap = LifecycleSnapshot{
+		State: LifecycleRunning, Prepared: cloneLifecyclePrepared(prepared), Health: postActivateHealth,
+		StartedAt: health.StartedAt, LastChecked: postActivateHealth.CheckedAt,
+	}
+	lifecycle.mu.Unlock()
+	lifecycle.recordSuccessfulStart(prepared)
+	lifecycle.Logger.Info("recovered selective-routing generation after manager crash", "engine", prepared.Engine, "pid", postActivateHealth.PID)
+	return nil
+}
+
+// DiscardAdopted removes any packet-path ownership for an adopted generation
+// which does not match the recovered selection, then stops its exact backend.
+func (lifecycle *Lifecycle) DiscardAdopted(ctx context.Context, prepared engine.PreparedCore, health engine.HealthStatus) error {
+	if err := lifecycle.lockOperation(ctx); err != nil {
+		return err
+	}
+	defer lifecycle.opMu.Unlock()
+	lifecycle.defaults()
+	if err := lifecycle.validate(); err != nil {
+		return err
+	}
+	lifecycle.mu.Lock()
+	lifecycle.snap = LifecycleSnapshot{
+		State: LifecycleRunning, Prepared: cloneLifecyclePrepared(prepared), Health: health,
+		StartedAt: health.StartedAt, LastChecked: health.CheckedAt,
+	}
+	lifecycle.mu.Unlock()
+	return lifecycle.stopLocked(ctx)
+}
+
 func cloneLifecyclePrepared(prepared engine.PreparedCore) engine.PreparedCore {
 	prepared.Args = append([]string(nil), prepared.Args...)
 	prepared.Env = append([]string(nil), prepared.Env...)
 	prepared.Capture.FakeIPRanges = append([]netip.Prefix(nil), prepared.Capture.FakeIPRanges...)
+	prepared.Capture.TUNAddresses = append([]netip.Prefix(nil), prepared.Capture.TUNAddresses...)
 	prepared.Capture.Destinations.CIDRs = append([]netip.Prefix(nil), prepared.Capture.Destinations.CIDRs...)
 	prepared.Capture.EndpointBypassCIDRs = append([]netip.Prefix(nil), prepared.Capture.EndpointBypassCIDRs...)
 	return prepared
@@ -345,6 +619,7 @@ func (lifecycle *Lifecycle) Snapshot() LifecycleSnapshot {
 	result.Prepared.Args = append([]string(nil), result.Prepared.Args...)
 	result.Prepared.Env = append([]string(nil), result.Prepared.Env...)
 	result.Prepared.Capture.FakeIPRanges = append([]netip.Prefix(nil), result.Prepared.Capture.FakeIPRanges...)
+	result.Prepared.Capture.TUNAddresses = append([]netip.Prefix(nil), result.Prepared.Capture.TUNAddresses...)
 	result.Prepared.Capture.Destinations.CIDRs = append([]netip.Prefix(nil), result.Prepared.Capture.Destinations.CIDRs...)
 	result.Prepared.Capture.EndpointBypassCIDRs = append([]netip.Prefix(nil), result.Prepared.Capture.EndpointBypassCIDRs...)
 	return result
@@ -378,12 +653,26 @@ func (lifecycle *Lifecycle) Monitor(ctx context.Context) {
 			continue
 		}
 		healthContext, cancel := context.WithTimeout(ctx, lifecycle.MonitorInterval)
+		if err := lifecycle.lockOperation(healthContext); err != nil {
+			cancel()
+			continue
+		}
+		current = lifecycle.Snapshot()
+		if current.State != LifecycleRunning {
+			lifecycle.opMu.Unlock()
+			cancel()
+			controllerFailures = 0
+			continue
+		}
 		health, err := lifecycle.Core.Health(healthContext)
 		cancel()
 		lifecycle.recordHealth(health, err)
 		if !health.Running {
 			lifecycle.Logger.Error("core exited; removing capture for fail-open recovery", "error", err)
-			_ = lifecycle.Stop(context.Background())
+			recoveryContext, cancelRecovery := lifecycle.recoveryContext()
+			_ = lifecycle.stopLocked(recoveryContext)
+			cancelRecovery()
+			lifecycle.opMu.Unlock()
 			controllerFailures = 0
 			continue
 		}
@@ -392,12 +681,16 @@ func (lifecycle *Lifecycle) Monitor(ctx context.Context) {
 			controllerFailures++
 			if controllerFailures >= lifecycle.ControllerFailures {
 				lifecycle.Logger.Error("core readiness remained unavailable; removing capture", "failures", controllerFailures, "error", err)
-				_ = lifecycle.Stop(context.Background())
+				recoveryContext, cancelRecovery := lifecycle.recoveryContext()
+				_ = lifecycle.stopLocked(recoveryContext)
+				cancelRecovery()
 				controllerFailures = 0
 			}
+			lifecycle.opMu.Unlock()
 			continue
 		}
 		controllerFailures = 0
+		lifecycle.opMu.Unlock()
 	}
 }
 
@@ -455,6 +748,12 @@ func (lifecycle *Lifecycle) cleanupContext(parent context.Context) (context.Cont
 		deadline = parentDeadline
 	}
 	return context.WithDeadline(context.Background(), deadline)
+}
+
+func (lifecycle *Lifecycle) recoveryContext() (context.Context, context.CancelFunc) {
+	lifecycle.defaults()
+	timeout := lifecycle.StartTimeout + lifecycle.ReadyTimeout + lifecycle.CleanupTimeout + 5*time.Second
+	return context.WithTimeout(context.Background(), timeout)
 }
 
 func (lifecycle *Lifecycle) fail(err error) error {

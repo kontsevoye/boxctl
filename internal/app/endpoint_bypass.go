@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/netip"
@@ -71,6 +72,13 @@ func NewEndpointBypassManager(layout state.Layout, store state.Store) *EndpointB
 }
 
 func (manager *EndpointBypassManager) Prepare(ctx context.Context, source []byte) ([]netip.Prefix, error) {
+	return manager.PrepareMihomo(ctx, source, true)
+}
+
+// PrepareMihomo extracts Mihomo endpoints and optionally publishes the
+// last-known-good address cache. Explicit profile preflight passes false so a
+// failed switch cannot change shared state before its journal exists.
+func (manager *EndpointBypassManager) PrepareMihomo(ctx context.Context, source []byte, persist bool) ([]netip.Prefix, error) {
 	if manager == nil {
 		return nil, nil
 	}
@@ -78,6 +86,25 @@ func (manager *EndpointBypassManager) Prepare(ctx context.Context, source []byte
 	if err != nil {
 		return nil, err
 	}
+	return manager.prepareHosts(ctx, hosts, persist)
+}
+
+// PrepareSingBox extracts network endpoints from a normalized sing-box JSON
+// document. Callers intentionally pass the driver's private merge result, not
+// the user source, so JSONC and multi-file native syntax are handled by
+// sing-box itself before boxctl inspects the stable structure.
+func (manager *EndpointBypassManager) PrepareSingBox(ctx context.Context, source []byte, persist bool) ([]netip.Prefix, error) {
+	if manager == nil {
+		return nil, nil
+	}
+	hosts, err := manager.singBoxEndpointHosts(source)
+	if err != nil {
+		return nil, err
+	}
+	return manager.prepareHosts(ctx, hosts, persist)
+}
+
+func (manager *EndpointBypassManager) prepareHosts(ctx context.Context, hosts []string, persist bool) ([]netip.Prefix, error) {
 	cache, err := manager.loadCache()
 	if err != nil {
 		return nil, fmt.Errorf("read endpoint bypass cache: %w", err)
@@ -117,12 +144,93 @@ func (manager *EndpointBypassManager) Prepare(ctx context.Context, source []byte
 		slices.Sort(encoded)
 		next.Hosts[key] = slices.Compact(encoded)
 	}
-	if !reflect.DeepEqual(cache, next) {
+	if persist && !reflect.DeepEqual(cache, next) {
 		if err := manager.State.WriteJSON(endpointBypassCachePath, next, 0o600); err != nil {
 			return nil, fmt.Errorf("save endpoint bypass cache: %w", err)
 		}
 	}
 	return normalizeNetPrefixes(result), nil
+}
+
+func (manager *EndpointBypassManager) singBoxEndpointHosts(source []byte) ([]string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(source))
+	decoder.UseNumber()
+	var document map[string]any
+	if err := decoder.Decode(&document); err != nil || document == nil {
+		return nil, errors.New("inspect sing-box endpoint configuration")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, errors.New("inspect sing-box endpoint configuration: trailing data")
+	}
+	seen := make(map[string]struct{})
+	hosts := make([]string, 0)
+	appendHost := func(value string) error {
+		value = strings.TrimSpace(value)
+		if parsed, err := url.Parse(value); err == nil && parsed.Hostname() != "" && parsed.Scheme != "" {
+			value = parsed.Hostname()
+		}
+		value = normalizeEndpointHost(value)
+		if value == "" {
+			return nil
+		}
+		if _, exists := seen[value]; exists {
+			return nil
+		}
+		if len(hosts) >= maxEndpointHosts {
+			return errors.New("endpoint host limit exceeded")
+		}
+		seen[value] = struct{}{}
+		hosts = append(hosts, value)
+		return nil
+	}
+	collectObjects := func(value any, keys ...string) error {
+		items, ok := value.([]any)
+		if !ok && value != nil {
+			return errors.New("inspect sing-box endpoint collection")
+		}
+		for _, item := range items {
+			object, ok := item.(map[string]any)
+			if !ok {
+				return errors.New("inspect sing-box endpoint item")
+			}
+			for _, key := range keys {
+				if candidate, ok := object[key].(string); ok {
+					if err := appendHost(candidate); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if err := collectObjects(document["outbounds"], "server"); err != nil {
+		return nil, err
+	}
+	if err := collectObjects(document["endpoints"], "server"); err != nil {
+		return nil, err
+	}
+	if dns, ok := document["dns"].(map[string]any); ok {
+		if err := collectObjects(dns["servers"], "server", "address"); err != nil {
+			return nil, err
+		}
+	}
+	if route, ok := document["route"].(map[string]any); ok {
+		if err := collectObjects(route["rule_set"], "url"); err != nil {
+			return nil, err
+		}
+	}
+	profileURLs, err := manager.profileSourceURLs()
+	if err != nil {
+		return nil, err
+	}
+	for _, sourceURL := range profileURLs {
+		if err := appendHost(sourceURL); err != nil {
+			return nil, err
+		}
+	}
+	slices.Sort(hosts)
+	return hosts, nil
 }
 
 func (manager *EndpointBypassManager) endpointHosts(source []byte) ([]string, error) {
@@ -213,6 +321,9 @@ func (manager *EndpointBypassManager) endpointHosts(source []byte) ([]string, er
 		return nil, err
 	}
 	for _, subscription := range subscriptions {
+		if normalizedEngine(subscription.Engine) != state.EngineMihomo {
+			continue
+		}
 		if err := appendURL(subscription.SourceURL); err != nil {
 			return nil, err
 		}
@@ -288,6 +399,9 @@ func (manager *EndpointBypassManager) proxySubscriptionRecords() ([]proxySubscri
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&registry) != nil || registry.Schema != 1 {
 		return nil, errors.New("inspect proxy subscription endpoints")
+	}
+	for index := range registry.Items {
+		registry.Items[index].Engine = normalizedEngine(registry.Items[index].Engine)
 	}
 	return registry.Items, nil
 }

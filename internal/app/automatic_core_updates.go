@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -13,6 +14,10 @@ const automaticCoreUpdateInterval = 6 * time.Hour
 
 type coreUpdateInstaller interface {
 	InstallCoreUpdate(context.Context) (web.CoreUpdateResult, error)
+}
+
+type selectedEngineUpdateInstaller interface {
+	InstallSelectedEngineUpdate(context.Context) (web.CoreUpdateResult, error)
 }
 
 // AutomaticCoreUpdates implements AUTO_UPDATE entirely in the backend. A
@@ -49,7 +54,7 @@ func (service *AutomaticCoreUpdates) Run(ctx context.Context) {
 	}
 	for {
 		if err := service.runOnce(ctx); err != nil && ctx.Err() == nil && service.Logger != nil {
-			service.Logger.Warn("automatic Mihomo update failed", "error", err)
+			service.Logger.Warn("automatic core update failed", "error", err)
 		}
 		interval := service.Interval
 		if interval <= 0 {
@@ -88,12 +93,22 @@ func (service *AutomaticCoreUpdates) runOnce(ctx context.Context) error {
 	if !settingBoolUnchecked(settings.Raw, "AUTO_UPDATE", false) {
 		return nil
 	}
-	result, err := service.Updates.InstallCoreUpdate(ctx)
-	if err != nil {
-		return err
+	var result web.CoreUpdateResult
+	var updateErr error
+	if selected, ok := service.Updates.(selectedEngineUpdateInstaller); ok {
+		result, updateErr = selected.InstallSelectedEngineUpdate(ctx)
+	} else {
+		result, updateErr = service.Updates.InstallCoreUpdate(ctx)
+	}
+	if updateErr != nil {
+		var public *web.PublicError
+		if errors.As(updateErr, &public) && public.Code == "custom_engine_update_disabled" {
+			return nil
+		}
+		return updateErr
 	}
 	if service.Logger != nil && result.CurrentVersion != "" && result.CurrentVersion != result.PreviousVersion {
-		service.Logger.Info("Mihomo updated automatically", "previous", result.PreviousVersion, "current", result.CurrentVersion)
+		service.Logger.Info("core updated automatically", "engine", result.Engine, "previous", result.PreviousVersion, "current", result.CurrentVersion)
 	}
 	return nil
 }

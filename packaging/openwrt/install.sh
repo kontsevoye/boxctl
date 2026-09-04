@@ -187,7 +187,7 @@ try_seamless_update() {
 		printf '%s\n' 'seamless boxctl update failed; refusing to continue with a full reinstall' >&2
 		return 2
 	fi
-	printf 'updated boxctl seamlessly in %s; Mihomo and the active dataplane were preserved\n' "$ROOT"
+	printf 'updated boxctl seamlessly in %s; the active proxy core and dataplane were preserved\n' "$ROOT"
 	return 0
 }
 
@@ -293,8 +293,9 @@ install_atomic() {
 mkdir -p \
 	"${ROOT}/bin" \
 	"${ROOT}/engines/mihomo" \
+	"${ROOT}/engines/sing-box" \
 	"${ROOT}/.boxctl" \
-	"${ROOT}/profiles" \
+	"${ROOT}/configs" \
 	"${ROOT}/local-rules" \
 	"${ROOT}/rule-providers" \
 	"${ROOT}/proxy-providers" \

@@ -466,9 +466,6 @@ func validateActiveGatewayState(active activeGatewayState) error {
 	if active.Version != activeGatewayStateVersion {
 		return fmt.Errorf("unsupported active gateway generation version %d", active.Version)
 	}
-	if active.Engine != state.EngineMihomo {
-		return fmt.Errorf("active gateway generation has unsupported engine %q", active.Engine)
-	}
 	if err := active.Capture.Validate(); err != nil {
 		return fmt.Errorf("invalid active capture generation: %w", err)
 	}
@@ -478,8 +475,17 @@ func validateActiveGatewayState(active activeGatewayState) error {
 	if active.Plan.TUNDevice != active.Capture.TUNDevice || active.Plan.LoopMark != active.Capture.LoopMark {
 		return errors.New("active gateway plan does not match its capture generation")
 	}
-	if _, err := engine.NewMihomoController(active.Controller, nil); err != nil {
-		return fmt.Errorf("invalid active controller generation: %w", err)
+	switch active.Engine {
+	case state.EngineMihomo:
+		if _, err := engine.NewMihomoController(active.Controller, nil); err != nil {
+			return fmt.Errorf("invalid active Mihomo controller generation: %w", err)
+		}
+	case state.EngineSingBox:
+		if _, err := engine.NewSingBoxController(active.Controller, nil); err != nil {
+			return fmt.Errorf("invalid active sing-box controller generation: %w", err)
+		}
+	default:
+		return fmt.Errorf("active gateway generation has unsupported engine %q", active.Engine)
 	}
 	return nil
 }

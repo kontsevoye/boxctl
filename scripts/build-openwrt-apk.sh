@@ -136,6 +136,7 @@ required_dependencies = {
     "dnsmasq",
     "firewall4",
     "ip-full",
+    "kmod-inet-diag",
     "kmod-nft-tproxy",
     "kmod-tun",
     "nftables-json",

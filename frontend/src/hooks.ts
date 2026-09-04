@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { APIError, request } from './api'
+import { APIError, requestWithFallback } from './api'
 import { useAppRefreshSignal } from './app-events'
 
 export interface QueryResult<T> {
@@ -11,7 +11,17 @@ export interface QueryResult<T> {
 }
 
 export function useQuery<T>(path: string, enabled = true): QueryResult<T> {
-  const [data, setData] = useState<T>()
+  return useResolvedQuery(path, undefined, enabled)
+}
+
+export function useFallbackQuery<T>(path: string, fallbackPath?: string, enabled = true): QueryResult<T> {
+  return useResolvedQuery(path, fallbackPath, enabled)
+}
+
+function useResolvedQuery<T>(path: string, fallbackPath: string | undefined, enabled: boolean): QueryResult<T> {
+  const queryKey = `${path}\n${fallbackPath ?? ''}`
+  const [result, setResult] = useState<{ key: string; data: T }>()
+  const data = result?.key === queryKey ? result.data : undefined
   const [loading, setLoading] = useState(enabled)
   const [error, setError] = useState<APIError>()
   const [revision, setRevision] = useState(0)
@@ -26,7 +36,7 @@ export function useQuery<T>(path: string, enabled = true): QueryResult<T> {
 
   useEffect(() => {
     if (!enabled) {
-      setData(undefined)
+      setResult(undefined)
       setLoading(false)
       setError(undefined)
       return
@@ -35,8 +45,8 @@ export function useQuery<T>(path: string, enabled = true): QueryResult<T> {
     activeRequest.current = controller
     setLoading(true)
     setError(undefined)
-    request<T>(path, { signal: controller.signal })
-      .then(setData)
+    requestWithFallback<T>(path, fallbackPath, { signal: controller.signal })
+      .then((value) => setResult({ key: queryKey, data: value }))
       .catch((reason: unknown) => {
         if (reason instanceof DOMException && reason.name === 'AbortError') return
         setError(reason instanceof APIError ? reason : new APIError(0, 'network_error', String(reason)))
@@ -49,7 +59,7 @@ export function useQuery<T>(path: string, enabled = true): QueryResult<T> {
       controller.abort()
       if (activeRequest.current === controller) activeRequest.current = undefined
     }
-  }, [appRevision, enabled, path, revision])
+  }, [appRevision, enabled, fallbackPath, path, queryKey, revision])
 
   return { data, loading, error, reload, cancel }
 }

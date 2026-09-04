@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,17 +15,19 @@ import (
 )
 
 type lifecycleFake struct {
-	mu            sync.Mutex
-	events        []string
-	prepared      engine.PreparedCore
-	health        engine.HealthStatus
-	prepareErr    error
-	prepareWait   bool
-	startErr      error
-	startWait     bool
-	stopErr       error
-	activateErr   error
-	deactivateErr error
+	mu                  sync.Mutex
+	events              []string
+	prepared            engine.PreparedCore
+	health              engine.HealthStatus
+	prepareErr          error
+	prepareWait         bool
+	startErr            error
+	startWait           bool
+	stopErr             error
+	stopErrs            []error
+	activateErr         error
+	deactivateErr       error
+	healthAfterActivate *engine.HealthStatus
 }
 
 func (fake *lifecycleFake) event(value string) {
@@ -59,10 +62,16 @@ func (fake *lifecycleFake) Start(ctx context.Context, _ engine.PreparedCore) err
 
 func (fake *lifecycleFake) Stop(context.Context) error {
 	fake.event("core-stop")
-	if fake.stopErr != nil {
-		return fake.stopErr
-	}
 	fake.mu.Lock()
+	stopErr := fake.stopErr
+	if len(fake.stopErrs) > 0 {
+		stopErr = fake.stopErrs[0]
+		fake.stopErrs = fake.stopErrs[1:]
+	}
+	if stopErr != nil {
+		fake.mu.Unlock()
+		return stopErr
+	}
 	fake.health.Running = false
 	fake.health.ControllerReady = false
 	fake.mu.Unlock()
@@ -98,6 +107,11 @@ func (fake *lifecycleFake) Health(context.Context) (engine.HealthStatus, error) 
 
 func (fake *lifecycleFake) Activate(context.Context, engine.PreparedCore) error {
 	fake.event("gateway-activate")
+	if fake.activateErr == nil && fake.healthAfterActivate != nil {
+		fake.mu.Lock()
+		fake.health = *fake.healthAfterActivate
+		fake.mu.Unlock()
+	}
 	return fake.activateErr
 }
 
@@ -136,7 +150,7 @@ func TestLifecycleTransactionOrdering(t *testing.T) {
 
 func TestLifecycleClearsPendingFirstStartOnlyAfterSuccessfulActivation(t *testing.T) {
 	t.Parallel()
-	newLifecycle := func(fake *lifecycleFake, onStarted func() error) *Lifecycle {
+	newLifecycle := func(fake *lifecycleFake, onStarted func(engine.PreparedCore) error) *Lifecycle {
 		return &Lifecycle{
 			Preparer: fake, Core: fake, Activation: fake, OnStarted: onStarted,
 			ReadyTimeout: time.Second, ReadyPollInterval: time.Millisecond,
@@ -149,8 +163,11 @@ func TestLifecycleClearsPendingFirstStartOnlyAfterSuccessfulActivation(t *testin
 		health:   engine.HealthStatus{Running: true, ControllerReady: true, PID: 42},
 	}
 	startRecords := 0
-	lifecycle := newLifecycle(successful, func() error {
+	lifecycle := newLifecycle(successful, func(started engine.PreparedCore) error {
 		startRecords++
+		if started.BinaryPath != successful.prepared.BinaryPath {
+			t.Fatalf("persisted prepared core = %#v, want %#v", started, successful.prepared)
+		}
 		return errors.New("read-only filesystem")
 	})
 	if err := lifecycle.Start(context.Background()); err != nil {
@@ -159,12 +176,17 @@ func TestLifecycleClearsPendingFirstStartOnlyAfterSuccessfulActivation(t *testin
 	if startRecords != 1 || lifecycle.Snapshot().State != LifecycleRunning {
 		t.Fatalf("successful start persistence calls=%d state=%s", startRecords, lifecycle.Snapshot().State)
 	}
-	// A repeated Start retries failed persistence without restarting the core.
+	// A repeated Start is a no-op: it neither restarts the core nor invokes the
+	// post-start callback for a runtime that is already running.
+	eventsBeforeNoop := append([]string(nil), successful.events...)
 	if err := lifecycle.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if startRecords != 2 {
-		t.Fatalf("running lifecycle did not retry marker cleanup: %d", startRecords)
+	if startRecords != 1 {
+		t.Fatalf("no-op start invoked OnStarted %d times, want exactly once", startRecords)
+	}
+	if !slices.Equal(successful.events, eventsBeforeNoop) {
+		t.Fatalf("no-op start changed lifecycle events: before=%v after=%v", eventsBeforeNoop, successful.events)
 	}
 
 	failed := &lifecycleFake{
@@ -173,7 +195,7 @@ func TestLifecycleClearsPendingFirstStartOnlyAfterSuccessfulActivation(t *testin
 		activateErr: errors.New("nft failed"),
 	}
 	failedRecords := 0
-	if err := newLifecycle(failed, func() error { failedRecords++; return nil }).Start(context.Background()); err == nil {
+	if err := newLifecycle(failed, func(engine.PreparedCore) error { failedRecords++; return nil }).Start(context.Background()); err == nil {
 		t.Fatal("activation failure was accepted")
 	}
 	if failedRecords != 0 {
@@ -195,6 +217,35 @@ func TestLifecycleRollsBackActivationFailure(t *testing.T) {
 	}
 	if err := lifecycle.Start(context.Background()); err == nil {
 		t.Fatal("activation failure was accepted")
+	}
+	want := []string{"prepare", "core-start", "gateway-activate", "gateway-deactivate", "core-stop"}
+	if !slices.Equal(fake.events, want) {
+		t.Fatalf("events %v, want %v", fake.events, want)
+	}
+	if lifecycle.Snapshot().State != LifecycleFailed {
+		t.Fatalf("unexpected state %#v", lifecycle.Snapshot())
+	}
+}
+
+func TestLifecycleRollsBackReadinessFailureCreatedByGatewayActivation(t *testing.T) {
+	t.Parallel()
+	prepared := engine.PreparedCore{
+		Engine: "sing-box", BinaryPath: "/fake/sing-box",
+		Capture: engine.CapturePlan{DNS: engine.DNSEndpoint{Enabled: true, Host: "0.0.0.0", Port: 7874}},
+	}
+	fake := &lifecycleFake{
+		prepared:            prepared,
+		health:              engine.HealthStatus{Running: true, ControllerReady: true, DNSReady: true, PID: 42},
+		healthAfterActivate: &engine.HealthStatus{Running: true, ControllerReady: true, DNSReady: false, PID: 42},
+	}
+	lifecycle := &Lifecycle{
+		Preparer: fake, Core: fake, Activation: fake,
+		ReadyTimeout: 30 * time.Millisecond, ReadyPollInterval: time.Millisecond,
+		snap: LifecycleSnapshot{State: LifecycleStopped},
+	}
+	err := lifecycle.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "readiness failed after gateway activation") {
+		t.Fatalf("Start() error = %v", err)
 	}
 	want := []string{"prepare", "core-start", "gateway-activate", "gateway-deactivate", "core-stop"}
 	if !slices.Equal(fake.events, want) {
@@ -325,6 +376,73 @@ func TestLifecycleOperationLockRespectsContext(t *testing.T) {
 	}
 	if len(fake.events) != 0 {
 		t.Fatalf("timed-out Stop touched dependencies: %v", fake.events)
+	}
+}
+
+func TestLifecycleSwitchCleansTargetBeforeOwnershipTransfer(t *testing.T) {
+	t.Parallel()
+	t.Run("missing commit", func(t *testing.T) {
+		t.Parallel()
+		target := prepareLifecycleOwnedRuntime(t, t.TempDir())
+		if _, err := (&Lifecycle{}).SwitchPrepared(context.Background(), target, nil); err == nil {
+			t.Fatal("SwitchPrepared() accepted a missing commit")
+		}
+		assertLifecycleRuntimeRemoved(t, target)
+	})
+	t.Run("operation lock timeout", func(t *testing.T) {
+		t.Parallel()
+		target := prepareLifecycleOwnedRuntime(t, t.TempDir())
+		lifecycle := &Lifecycle{}
+		lifecycle.opMu.Lock()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		if _, err := lifecycle.SwitchPrepared(ctx, target, func() error { return nil }); !errors.Is(err, context.DeadlineExceeded) {
+			lifecycle.opMu.Unlock()
+			t.Fatalf("SwitchPrepared() error = %v, want operation-lock deadline", err)
+		}
+		lifecycle.opMu.Unlock()
+		assertLifecycleRuntimeRemoved(t, target)
+	})
+	t.Run("invalid lifecycle", func(t *testing.T) {
+		t.Parallel()
+		target := prepareLifecycleOwnedRuntime(t, t.TempDir())
+		if _, err := (&Lifecycle{}).SwitchPrepared(context.Background(), target, func() error { return nil }); err == nil {
+			t.Fatal("SwitchPrepared() accepted incomplete dependencies")
+		}
+		assertLifecycleRuntimeRemoved(t, target)
+	})
+}
+
+func TestLifecycleSwitchCleansUnusedRollbackCloneWhenTargetStopFails(t *testing.T) {
+	t.Parallel()
+	runtimeBase := t.TempDir()
+	current := prepareLifecycleOwnedRuntime(t, runtimeBase)
+	target := prepareLifecycleOwnedRuntime(t, runtimeBase)
+	health := engine.HealthStatus{Running: true, ControllerReady: true, PID: 42, CheckedAt: time.Now()}
+	fake := &lifecycleFake{
+		health:   health,
+		stopErrs: []error{nil, errors.New("target core did not stop")},
+	}
+	lifecycle := &Lifecycle{
+		Preparer: fake, Core: fake, Activation: fake,
+		ReadyTimeout: time.Second, ReadyPollInterval: time.Millisecond,
+		snap: LifecycleSnapshot{State: LifecycleRunning, Prepared: current, Health: health},
+	}
+	applied, err := lifecycle.SwitchPrepared(context.Background(), target, func() error {
+		return errors.New("persist active profile")
+	})
+	if !applied || err == nil {
+		t.Fatalf("SwitchPrepared() = (%v, %v), want applied failure", applied, err)
+	}
+	rollbackRoots, globErr := filepath.Glob(filepath.Join(runtimeBase, "boxctl-mihomo-rollback-*"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(rollbackRoots) != 0 {
+		t.Fatalf("unused rollback clone leaked after target stop failure: %v", rollbackRoots)
+	}
+	if _, statErr := os.Stat(target.RuntimeConfigPath); statErr != nil {
+		t.Fatalf("possibly live target runtime was removed after Stop failure: %v", statErr)
 	}
 }
 
@@ -472,6 +590,101 @@ func TestLifecycleAdoptDoesNotTouchCoreOrActivation(t *testing.T) {
 	snapshot := lifecycle.Snapshot()
 	if snapshot.State != LifecycleRunning || snapshot.Health.PID != 42 || snapshot.Prepared.BinaryPath != prepared.BinaryPath {
 		t.Fatalf("adopted snapshot = %#v", snapshot)
+	}
+}
+
+func TestLifecycleRecoverAdoptedReactivatesExactGeneration(t *testing.T) {
+	t.Parallel()
+	prepared := engine.PreparedCore{
+		Engine: "sing-box", BinaryPath: "/fake/sing-box",
+		Capture: engine.CapturePlan{DNS: engine.DNSEndpoint{Enabled: true}},
+	}
+	startedAt := time.Now().Add(-time.Hour)
+	health := engine.HealthStatus{
+		Running: true, ControllerReady: true, DNSReady: true, PID: 42,
+		StartedAt: startedAt, CheckedAt: time.Now(),
+	}
+	fake := &lifecycleFake{health: health}
+	recorded := engine.PreparedCore{}
+	lifecycle := &Lifecycle{
+		Preparer: fake, Core: fake, Activation: fake,
+		ReadyTimeout: time.Second, ReadyPollInterval: time.Millisecond,
+		OnStarted: func(prepared engine.PreparedCore) error { recorded = prepared; return nil },
+	}
+	if err := lifecycle.RecoverAdopted(context.Background(), prepared, health); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(fake.events, []string{"gateway-activate"}) {
+		t.Fatalf("crash recovery events = %v", fake.events)
+	}
+	snapshot := lifecycle.Snapshot()
+	if snapshot.State != LifecycleRunning || snapshot.Prepared.BinaryPath != prepared.BinaryPath || snapshot.Health.PID != health.PID || !snapshot.StartedAt.Equal(startedAt) {
+		t.Fatalf("recovered snapshot = %#v", snapshot)
+	}
+	if recorded.BinaryPath != prepared.BinaryPath {
+		t.Fatalf("successful recovery record = %#v", recorded)
+	}
+}
+
+func TestLifecycleRecoverAdoptedFailsOpenWhenActivationFails(t *testing.T) {
+	t.Parallel()
+	prepared := engine.PreparedCore{Engine: "mihomo", BinaryPath: "/fake/core"}
+	health := engine.HealthStatus{Running: true, ControllerReady: true, PID: 42, CheckedAt: time.Now()}
+	fake := &lifecycleFake{health: health, activateErr: errors.New("nft apply failed")}
+	lifecycle := &Lifecycle{
+		Preparer: fake, Core: fake, Activation: fake,
+		ReadyTimeout: time.Second, ReadyPollInterval: time.Millisecond,
+	}
+	if err := lifecycle.RecoverAdopted(context.Background(), prepared, health); err == nil {
+		t.Fatal("failed adopted activation was accepted")
+	}
+	want := []string{"gateway-activate", "gateway-deactivate", "core-stop"}
+	if !slices.Equal(fake.events, want) {
+		t.Fatalf("recovery rollback events = %v, want %v", fake.events, want)
+	}
+	snapshot := lifecycle.Snapshot()
+	if snapshot.State != LifecycleFailed || snapshot.Prepared.BinaryPath != "" || snapshot.Health.Running {
+		t.Fatalf("failed recovery retained runtime ownership: %#v", snapshot)
+	}
+}
+
+func TestLifecycleRecoverAdoptedKeepsCoreWhenCleanupFails(t *testing.T) {
+	t.Parallel()
+	prepared := engine.PreparedCore{Engine: "mihomo", BinaryPath: "/fake/core"}
+	health := engine.HealthStatus{Running: true, ControllerReady: true, PID: 42, CheckedAt: time.Now()}
+	fake := &lifecycleFake{
+		health: health, activateErr: errors.New("nft apply failed"), deactivateErr: errors.New("nft cleanup failed"),
+	}
+	lifecycle := &Lifecycle{
+		Preparer: fake, Core: fake, Activation: fake,
+		ReadyTimeout: time.Second, ReadyPollInterval: time.Millisecond,
+	}
+	if err := lifecycle.RecoverAdopted(context.Background(), prepared, health); err == nil {
+		t.Fatal("failed adopted activation cleanup was accepted")
+	}
+	if !slices.Equal(fake.events, []string{"gateway-activate", "gateway-deactivate"}) {
+		t.Fatalf("core was stopped after incomplete adopted cleanup: %v", fake.events)
+	}
+	snapshot := lifecycle.Snapshot()
+	if snapshot.State != LifecycleCleanupFailed || snapshot.Prepared.BinaryPath != prepared.BinaryPath || !snapshot.Health.Running {
+		t.Fatalf("cleanup-failed recovery lost core ownership: %#v", snapshot)
+	}
+}
+
+func TestLifecycleDiscardAdoptedCleansBeforeStopping(t *testing.T) {
+	t.Parallel()
+	prepared := engine.PreparedCore{Engine: "sing-box", BinaryPath: "/fake/sing-box"}
+	health := engine.HealthStatus{Running: true, ControllerReady: true, PID: 42, CheckedAt: time.Now()}
+	fake := &lifecycleFake{health: health}
+	lifecycle := &Lifecycle{Preparer: fake, Core: fake, Activation: fake}
+	if err := lifecycle.DiscardAdopted(context.Background(), prepared, health); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(fake.events, []string{"gateway-deactivate", "core-stop"}) {
+		t.Fatalf("discard events = %v", fake.events)
+	}
+	if snapshot := lifecycle.Snapshot(); snapshot.State != LifecycleStopped || snapshot.Prepared.BinaryPath != "" {
+		t.Fatalf("discarded snapshot = %#v", snapshot)
 	}
 }
 
@@ -672,5 +885,39 @@ func TestMonitorFailsOpenAfterCoreExit(t *testing.T) {
 	defer fake.mu.Unlock()
 	if !slices.Contains(fake.events, "gateway-deactivate") || !slices.Contains(fake.events, "core-stop") {
 		t.Fatalf("cleanup missing from %v", fake.events)
+	}
+}
+
+func prepareLifecycleOwnedRuntime(t *testing.T, runtimeBase string) engine.PreparedCore {
+	t.Helper()
+	fixtureRoot := t.TempDir()
+	binaryPath := filepath.Join(fixtureRoot, "mihomo-fake")
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(fixtureRoot, "profile.yaml")
+	if err := os.WriteFile(sourcePath, []byte("mode: rule\nproxies: []\nproxy-groups: []\nrules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := engine.NewMihomoDriver(engine.MihomoOptions{}).Prepare(context.Background(), engine.PrepareRequest{
+		BinaryPath:       binaryPath,
+		SourceConfigPath: sourcePath,
+		RuntimeDir:       runtimeBase,
+		Capture: engine.CapturePlan{
+			TCP: engine.ProtocolCapture{Method: engine.CaptureTPROXY, Port: 7894},
+			UDP: engine.ProtocolCapture{Method: engine.CaptureTPROXY, Port: 7894},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.CleanupPreparedRuntime(prepared) })
+	return prepared
+}
+
+func assertLifecycleRuntimeRemoved(t *testing.T, prepared engine.PreparedCore) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Dir(prepared.RuntimeConfigPath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unaccepted runtime root survived: %v", err)
 	}
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/kontsevoye/boxctl/internal/engine"
 	"github.com/kontsevoye/boxctl/internal/eventlog"
+	"github.com/kontsevoye/boxctl/internal/state"
 	"github.com/kontsevoye/boxctl/internal/web"
 )
 
@@ -42,6 +43,7 @@ type CoreBackend interface {
 // settings. CoreName must not contain profile or controller data.
 type CoreServiceOptions struct {
 	CoreName                string
+	SelectedEngine          func() string
 	LogHistory              int
 	MaxLogMessageBytes      int
 	UnsafeExternalDashboard bool
@@ -54,6 +56,7 @@ type CoreService struct {
 	preparer                ActivePreparer
 	lifecycle               *Lifecycle
 	coreName                string
+	selectedEngine          func() string
 	logs                    *eventlog.Ring
 	history                 int
 	maxMessage              int
@@ -108,6 +111,7 @@ func NewCoreService(lifecycle *Lifecycle, preparer ActivePreparer, core CoreBack
 		preparer:                preparer,
 		lifecycle:               lifecycle,
 		coreName:                strings.TrimSpace(options.CoreName),
+		selectedEngine:          options.SelectedEngine,
 		logs:                    eventlog.New(history),
 		history:                 history,
 		maxMessage:              maxMessage,
@@ -174,6 +178,9 @@ func (service *CoreService) Capabilities(ctx context.Context) (web.Capabilities,
 	}
 	capabilities := service.core.Capabilities()
 	snapshot := service.lifecycleView()
+	engineName := service.name(snapshot)
+	mihomoResources := engineName == state.EngineMihomo
+	externalDashboard := service.unsafeExternalDashboard && mihomoResources
 	return web.Capabilities{
 		CoreName:    service.name(snapshot),
 		CoreVersion: snapshot.health.Version,
@@ -181,7 +188,7 @@ func (service *CoreService) Capabilities(ctx context.Context) (web.Capabilities,
 			"status":      true,
 			"profiles":    true,
 			"rawConfig":   true,
-			"ruleLists":   true,
+			"ruleLists":   mihomoResources,
 			"backups":     true,
 			"settings":    true,
 			"systemLogs":  true,
@@ -191,9 +198,9 @@ func (service *CoreService) Capabilities(ctx context.Context) (web.Capabilities,
 			"coreLogs":    capabilities.ProcessLogs,
 		},
 		Actions: map[string]bool{
-			"createRuleList":      true,
-			"editRuleList":        true,
-			"deleteRuleList":      true,
+			"createRuleList":      mihomoResources,
+			"editRuleList":        mihomoResources,
+			"deleteRuleList":      mihomoResources,
 			"exportBackup":        true,
 			"importBackup":        true,
 			"updateCore":          true,
@@ -226,7 +233,7 @@ func (service *CoreService) Capabilities(ctx context.Context) (web.Capabilities,
 			"trafficStream":       capabilities.TrafficStream,
 			"ruleMutation":        capabilities.RuleMutation,
 			"processLogs":         capabilities.ProcessLogs,
-			"externalDashboard":   service.unsafeExternalDashboard,
+			"externalDashboard":   externalDashboard,
 		},
 	}, nil
 }
@@ -951,6 +958,12 @@ func (service *CoreService) name(snapshot coreLifecycleView) string {
 	if snapshot.engine != "" {
 		return snapshot.engine
 	}
+	if service.selectedEngine != nil {
+		switch selected := strings.TrimSpace(service.selectedEngine()); selected {
+		case state.EngineMihomo, state.EngineSingBox:
+			return selected
+		}
+	}
 	if service.coreName != "" {
 		return service.coreName
 	}
@@ -974,6 +987,7 @@ func (service *CoreService) lifecycleView() coreLifecycleView {
 }
 
 func cloneCapturePlan(plan engine.CapturePlan) engine.CapturePlan {
+	plan.TUNAddresses = append([]netip.Prefix(nil), plan.TUNAddresses...)
 	plan.FakeIPRanges = append([]netip.Prefix(nil), plan.FakeIPRanges...)
 	plan.Destinations.CIDRs = append([]netip.Prefix(nil), plan.Destinations.CIDRs...)
 	plan.EndpointBypassCIDRs = append([]netip.Prefix(nil), plan.EndpointBypassCIDRs...)
@@ -996,8 +1010,9 @@ func coreEntryToWeb(entry eventlog.Entry) web.LogEntry {
 
 func coreLogLevel(entry engine.LogEntry) string {
 	message := strings.ToLower(entry.Message)
+	_, nativeStream := splitCoreLogStream(entry.Stream)
 	switch {
-	case entry.Stream == "stderr" || strings.Contains(message, "level=error") || strings.HasPrefix(message, "[error]"):
+	case nativeStream == "stderr" || strings.Contains(message, "level=error") || strings.HasPrefix(message, "[error]"):
 		return "error"
 	case strings.Contains(message, "level=warning") || strings.Contains(message, "level=warn") || strings.HasPrefix(message, "[warn]"):
 		return "warn"
@@ -1009,12 +1024,25 @@ func coreLogLevel(entry engine.LogEntry) string {
 }
 
 func coreLogComponent(stream string) string {
-	switch stream {
-	case "stdout", "stderr", "supervisor":
-		return "core." + stream
-	default:
-		return "core"
+	engineName, nativeStream := splitCoreLogStream(stream)
+	prefix := "core"
+	if engineName != "" {
+		prefix += "." + engineName
 	}
+	switch nativeStream {
+	case "stdout", "stderr", "supervisor":
+		return prefix + "." + nativeStream
+	default:
+		return prefix
+	}
+}
+
+func splitCoreLogStream(stream string) (string, string) {
+	engineName, nativeStream, found := strings.Cut(stream, "/")
+	if !found || engineName == "" || nativeStream == "" {
+		return "", stream
+	}
+	return engineName, nativeStream
 }
 
 func safeCoreLogMessage(message string, maximum int) string {
@@ -1070,10 +1098,16 @@ func optionalCoreTime(value string) *time.Time {
 
 func sameCapturePlan(left, right engine.CapturePlan) bool {
 	if left.TCP != right.TCP || left.UDP != right.UDP || left.DNS != right.DNS ||
-		left.TUNDevice != right.TUNDevice || left.TUNStack != right.TUNStack || left.LoopMark != right.LoopMark ||
+		left.TUNDevice != right.TUNDevice || left.TUNStack != right.TUNStack || left.TUNMTU != right.TUNMTU || left.LoopMark != right.LoopMark ||
+		left.Capabilities != right.Capabilities || len(left.TUNAddresses) != len(right.TUNAddresses) ||
 		left.Destinations.Mode != right.Destinations.Mode || len(left.Destinations.CIDRs) != len(right.Destinations.CIDRs) ||
-		len(left.FakeIPRanges) != len(right.FakeIPRanges) {
+		len(left.FakeIPRanges) != len(right.FakeIPRanges) || len(left.EndpointBypassCIDRs) != len(right.EndpointBypassCIDRs) {
 		return false
+	}
+	for index := range left.TUNAddresses {
+		if left.TUNAddresses[index] != right.TUNAddresses[index] {
+			return false
+		}
 	}
 	for index := range left.FakeIPRanges {
 		if left.FakeIPRanges[index] != right.FakeIPRanges[index] {
@@ -1082,6 +1116,11 @@ func sameCapturePlan(left, right engine.CapturePlan) bool {
 	}
 	for index := range left.Destinations.CIDRs {
 		if left.Destinations.CIDRs[index] != right.Destinations.CIDRs[index] {
+			return false
+		}
+	}
+	for index := range left.EndpointBypassCIDRs {
+		if left.EndpointBypassCIDRs[index] != right.EndpointBypassCIDRs[index] {
 			return false
 		}
 	}

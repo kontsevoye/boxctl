@@ -4,29 +4,66 @@
 starts and supervises a proxy core, generates its configuration, and manages
 only the `nftables`, policy-routing, and DNS state owned by boxctl.
 
-Mihomo is currently supported. A sing-box driver is planned; the core and
-configuration contracts are already separated so another engine can be added
-without replacing the web interface or the OpenWrt integration.
+Profiles and managed engine artifacts carry an explicit engine identity.
+Mihomo remains the established core; sing-box support targets the reviewed
+`>=1.14.0,<1.15.0` compatibility window without changing ownership of the
+OpenWrt dataplane.
 
 ## Features
 
 - built-in English and Russian web interface with password authentication;
-- Mihomo start, stop, restart, and reload operations through `procd`;
+- engine-aware start, stop, restart, health, and capability contracts;
 - TPROXY, hybrid, TUN, mixed, and mixed2 capture modes;
-- validated editing of Mihomo YAML and local rule lists;
-- remote profiles, proxy subscriptions, and rule/proxy providers;
-- verified Mihomo updates with size, SHA-256, and Linux/AArch64 ELF checks;
+- validated engine-native Mihomo YAML and sing-box JSON profiles;
+- remote profiles for both engines, plus Mihomo proxy subscriptions and
+  rule/proxy providers;
+- verified engine updates with size, SHA-256, Linux/AArch64 ELF, static-link,
+  upstream version, and build-tag checks where applicable;
 - verified boxctl self-updates from GitHub Releases or an offline local file,
   with an atomic swap, procd restart check, and automatic rollback;
 - export and restore of portable boxctl state;
 - fail-open cleanup that removes boxctl-owned routing state and restores DNS
   settings when the core stops;
-- separate traffic, connection, CPU, and memory metrics for boxctl and Mihomo.
+- separate traffic, connection, CPU, and memory metrics for boxctl and the
+  active proxy core.
 
 boxctl targets OpenWrt systems using `firewall4`, `procd`, `nftables`, and
 `ip-full`. The installer does not import another routing manager's state. A
 fresh installation creates an isolated `/opt/boxctl` root; rerunning the
 installer upgrades that installation while preserving its state.
+`kmod-inet-diag` is installed for process-aware sing-box routing rules;
+`kmod-nft-queue` is intentionally not required because boxctl keeps sing-box
+`auto_redirect` disabled and remains the sole nftables owner.
+
+The selected profile is the only persisted engine selector. Profile names may
+be reused across engines because identity is the pair `engine:name`; the UI
+filters profiles and managed resources by that identity. Existing untagged
+profiles and resources migrate as Mihomo. Switching a running selection always
+requires confirmation and performs target preflight before stopping the live
+generation. Runtime, gateway, metadata, and applied revision are committed as
+one rollback-capable transition; a durable journal reconciles an interrupted
+switch against the exact adopted runtime revision on the next start.
+
+sing-box does not expose Mihomo's proxy-provider or rule-provider management
+semantics. boxctl therefore keeps proxy subscriptions, local rule-list surgery,
+fake-IP list generation, and external Zashboard explicitly Mihomo-only instead
+of presenting operations that cannot affect a sing-box runtime. Native
+sing-box `outbounds` and `route.rule_set` remain editable in its JSON profile;
+the integrated proxies, rules, connections, traffic, and log pages use its
+loopback Clash API adapter. Remote sing-box profile refreshes are staged as
+pending changes and never restart the core in the background.
+
+OpenWrt DNS `upstream` mode requires the native sing-box profile to define an
+independent `dns.servers` chain. Implicit or explicit `local`/`resolved`
+resolution is rejected because dnsmasq itself is pointed at sing-box in this
+mode and would form a resolver loop. The default/final server must provide
+general recursive resolution; scoped or synthetic `hosts`, `mdns`, `fakeip`,
+or MagicDNS-only servers may be used only as auxiliary rule targets. For
+example, a literal upstream uses
+`{"dns":{"servers":[{"type":"udp","tag":"upstream","server":"1.1.1.1"}],"final":"upstream"}}`.
+After applying the dnsmasq/firewall generation, boxctl performs a fresh query
+below the reserved `.invalid` TLD and rolls the whole activation back on DNS
+failure; `SERVFAIL` and `REFUSED` do not count as readiness.
 
 ## Requirements
 
@@ -70,14 +107,17 @@ The binary is written to `dist/boxctl-linux-arm64`; the bundle is written to
 
 ### OpenWrt integration test
 
-The integration suite installs one boxctl instance in a clean OpenWrt VM and
-checks the `procd` lifecycle, real `nftables` and policy-routing rules, TPROXY
-marking for test LAN traffic, a direct neighbouring flow, and shutdown cleanup:
+The integration suite installs one boxctl instance with Mihomo and sing-box in
+a clean OpenWrt VM. It checks engine-tagged profile selection, live
+Mihomo-to-sing-box-to-Mihomo cutover, exact process/listener identity, the
+`procd` lifecycle, real `nftables` and policy-routing rules, TPROXY traffic
+through both engines, a direct neighbouring Mihomo flow, and shutdown cleanup:
 
 ```sh
 nix develop --command tests/integration/run.sh \
   --manager dist/boxctl-linux-arm64 \
-  --core /path/to/mihomo-linux-arm64
+  --mihomo /path/to/mihomo-linux-arm64 \
+  --sing-box /path/to/sing-box-linux-arm64
 ```
 
 The test downloads the pinned OpenWrt 25.12.5 image from the official mirror
@@ -100,9 +140,9 @@ current Git revision (plus a timestamp for a dirty tree), so repeated local
 builds cannot be mistaken for the same `dev` binary. When a compatible boxctl
 installation is already running and its OpenWrt integration files are current,
 deployment uses the local binary as an offline self-update and re-executes only
-the manager; Mihomo, active connections, DNS, nftables, and policy routing stay
+the manager; the active core, connections, DNS, nftables, and policy routing stay
 in place. Otherwise it falls back to the transactional installer. On a fresh
-installation, Mihomo remains stopped until an administrator reviews the
+installation, the selected core remains stopped until an administrator reviews the
 configuration and selects **Start**.
 
 Run `./scripts/deploy-openwrt.sh --help` for SSH, version, and dry-run options.
@@ -167,15 +207,23 @@ proxied by boxctl.
   through the managed capture plan.
 - The management UI uses plain HTTP by default and must remain on a trusted LAN
   or loopback unless HTTPS is configured explicitly.
-- Mihomo is installed separately and must be configured before traffic can be
-  captured. A sing-box driver is not implemented.
+- Engine binaries are installed separately and must be validated before traffic
+  can be captured. Managed sing-box artifacts are intentionally restricted to
+  upstream-compatible 1.14.x static ARM64-musl archives.
+- In DNS `upstream` mode, sing-box profiles must carry a non-system recursive
+  DNS transport; profiles without explicit `dns.servers` can instead use
+  `redirect` or `disabled` mode when the native resolver design requires it.
+- The optional Zashboard integration remains Mihomo-only; sing-box capabilities
+  are exposed through boxctl's normalized engine API instead of pretending its
+  Clash-compatible API implements every Mihomo dashboard endpoint.
 
 ## CLI
 
 ```text
 boxctl serve [--root PATH] [--listen ADDRESS] [--start-stopped]
 boxctl setpass
-boxctl config validate [--file PATH]
+boxctl config validate [--engine mihomo|sing-box] [--file PATH]
+boxctl engine install sing-box --file /tmp/sing-box-1.14.0-linux-arm64-musl.tar.gz [--sha256 HEX] [--root PATH]
 boxctl fw start|update|diagnose|stop
 boxctl doctor [--root PATH] [--json]
 boxctl self-update check [--repo OWNER/REPO] [--root PATH]
@@ -198,10 +246,10 @@ executed only for `boxctl version`, and required to report the release version.
 The binary is staged beside `/opt/boxctl/bin/boxctl`, atomically swapped into
 place, and retained as `boxctl.prev`. Each binary reports an internal settings
 schema version and capture-injector version. When both match, the default
-activation re-executes only the manager/web image in place: the exact Mihomo process is
+activation re-executes only the manager/web image in place: the exact active-core process is
 verified and adopted by the new manager while active connections, nftables,
 policy routing, and DNS stay in place. A compatibility change requires an
-interactive confirmation because it restarts Mihomo and interrupts active
+interactive confirmation because it restarts the active core and interrupts active
 connections. `--full-restart` forces that path and acts as non-interactive
 approval; `--no-restart` only swaps the binary. The CLI requires the new
 manager to remain running and restores the previous binary if verification
@@ -218,6 +266,46 @@ The updater reads `FILE.sha256` automatically. An explicit 64-character digest
 may instead be provided with `--sha256`. Local files without either checksum
 are rejected. `boxctl self-update rollback` restores the one retained previous
 binary.
+
+## sing-box engine artifacts
+
+The managed sing-box installer accepts the official
+`sing-box-VERSION-linux-arm64-musl.tar.gz` archive for stable 1.14.x releases.
+It rejects the generic arm64 build because that artifact uses a glibc dynamic
+loader, and it does not install the upstream OpenWrt package because that
+package brings a separate init service and configuration owner. Archives are
+size- and SHA-256-bounded and may contain only their canonical top-level
+directory plus regular `sing-box` and `LICENSE` files. The candidate must be a
+static Linux/AArch64 ELF, report the exact archive version, and include
+`with_musl`, `with_clash_api`, and `with_gvisor` build tags.
+
+Verified versions are published under
+`/opt/boxctl/engines/sing-box/versions/VERSION/`. An atomic `current.json`
+registry retains the immediately previous version for pointer rollback. A
+local `--file` installation requires an explicit checksum or a bounded regular
+`FILE.sha256` companion and is recorded as custom with automatic updates
+disabled. Validation executes the staged binary only for its `version` output;
+an operator-supplied checksum detects replacement or corruption but does not
+make an untrusted custom binary trustworthy.
+
+OpenWrt sysupgrade persistence retains the entire `/opt/boxctl` tree. Capacity
+planning must therefore include the current and previous approximately 86 MB
+sing-box binaries, temporary staging space, and the resulting sysupgrade
+archive; engine binaries remain excluded from boxctl application backups.
+Backup schema 2 includes both `config.yaml` and `config.json`, engine-native
+profiles, and portable registries, while recording required engine
+version/digest metadata separately. Restore still reads schema 1 archives and
+checks any exact managed-engine requirement before replacing current state;
+runtime, process, transition, lock, and controller-secret state is never
+restored.
+
+sing-box is a separate upstream program and is not bundled with boxctl. Its
+downloaded `LICENSE` is retained beside each installed binary together with
+the upstream URL, release tag, archive and binary digests, build tags, and a
+no-affiliation marker. sing-box 1.14 is distributed upstream under
+GPL-3.0-or-later with additional upstream terms; see the
+[upstream license](https://github.com/SagerNet/sing-box/blob/v1.14.0/LICENSE).
+Installing or redistributing sing-box does not change boxctl's own MIT license.
 
 Every push to `master` runs the checks, builds the release artifacts once, and
 then creates a tag-backed GitHub Release. The workflow finds the highest

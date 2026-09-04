@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -78,11 +77,37 @@ func (preparer *ActiveMihomoPreparer) PrepareActive(ctx context.Context) (engine
 	if activeErr != nil && !errors.Is(activeErr, fs.ErrNotExist) {
 		return engine.PreparedCore{}, fmt.Errorf("read active profile: %w", activeErr)
 	}
+	return preparer.prepareProfile(ctx, active, activeErr, false)
+}
+
+// PrepareProfile prepares one explicit Mihomo profile without publishing it as
+// active. Cross-engine switching uses this for complete target preflight while
+// the old active metadata and runtime are still intact.
+func (preparer *ActiveMihomoPreparer) PrepareProfile(ctx context.Context, profile state.ActiveProfile) (engine.PreparedCore, error) {
+	if preparer == nil || preparer.Config == nil {
+		return engine.PreparedCore{}, errors.New("mihomo preparer is not initialized")
+	}
+	if profile.Engine == "" {
+		profile.Engine = state.EngineMihomo
+	}
+	if profile.Engine != state.EngineMihomo {
+		return engine.PreparedCore{}, fmt.Errorf("%w: profile engine %q is not Mihomo", engine.ErrUnsupported, profile.Engine)
+	}
+	return preparer.prepareProfile(ctx, profile, nil, true)
+}
+
+func (preparer *ActiveMihomoPreparer) prepareProfile(ctx context.Context, active state.ActiveProfile, activeErr error, explicit bool) (engine.PreparedCore, error) {
 	if activeErr == nil && active.Engine != "" && active.Engine != state.EngineMihomo {
-		return engine.PreparedCore{}, fmt.Errorf("%w: active engine %q has no v1 driver", engine.ErrUnsupported, active.Engine)
+		return engine.PreparedCore{}, fmt.Errorf("%w: active engine %q is not Mihomo", engine.ErrUnsupported, active.Engine)
 	}
 
-	sourcePath, err := preparer.sourcePath(active, activeErr)
+	var sourcePath string
+	var err error
+	if explicit {
+		sourcePath, err = preparer.explicitSourcePath(active)
+	} else {
+		sourcePath, err = preparer.sourcePath(active, activeErr)
+	}
 	if err != nil {
 		return engine.PreparedCore{}, err
 	}
@@ -98,44 +123,19 @@ func (preparer *ActiveMihomoPreparer) PrepareActive(ctx context.Context) (engine
 	if err != nil {
 		return engine.PreparedCore{}, fmt.Errorf("load runtime settings: %w", err)
 	}
-	managedSettings, err := managedRuntimeSettings(managed)
+	managedSettings, err := preparer.managedCaptureSettings(source, managed, runtimeSettings, !explicit)
 	if err != nil {
 		return engine.PreparedCore{}, err
-	}
-	if managedSettings.DNSFakeIP {
-		fakeIPManager := preparer.FakeIP
-		if fakeIPManager == nil {
-			fakeIPManager = NewFakeIPCaptureManager(preparer.Layout)
-		}
-		policy, policyErr := fakeIPManager.PrepareWithOptions(source, runtimeSettings.AutoFakeIP, FakeIPCaptureOptions{
-			IncludeExternalIPProviders: runtimeSettings.AutoFakeIPIncludeExternalIPProviders,
-		})
-		if policyErr != nil {
-			return engine.PreparedCore{}, fmt.Errorf("prepare fake-IP destination policy: %w", policyErr)
-		}
-		managedSettings.DNSFakeIP = policy.Selective
-		managedSettings.FakeIPFilterMode = policy.FilterMode
-		managedSettings.FakeIPRanges = append([]netip.Prefix(nil), policy.FakeIPRanges...)
-		managedSettings.AdditionalCaptureCIDRs = append([]netip.Prefix(nil), policy.Document.Effective...)
 	}
 	capture, err := runtimeSettings.CapturePlan(managedSettings)
 	if err != nil {
 		return engine.PreparedCore{}, err
 	}
-	runtimeSource := source
-	if preparer.Subscriptions != nil {
-		providers, providerErr := preparer.Subscriptions.EnabledProviderSpecs()
-		if providerErr != nil {
-			return engine.PreparedCore{}, fmt.Errorf("load proxy subscriptions: %w", providerErr)
-		}
-		if len(providers) > 0 {
-			runtimeSource, err = configpkg.InjectMihomoProxyProviders(source, providers)
-			if err != nil {
-				return engine.PreparedCore{}, fmt.Errorf("inject proxy subscriptions: %w", err)
-			}
-		}
+	runtimeSource, err := preparer.injectProxySubscriptions(source)
+	if err != nil {
+		return engine.PreparedCore{}, err
 	}
-	runtimeSource, err = preparer.applyRuntimeProviderSettings(ctx, runtimeSource, runtimeSettings, true)
+	runtimeSource, err = preparer.applyRuntimeProviderSettings(ctx, runtimeSource, runtimeSettings, !explicit)
 	if err != nil {
 		return engine.PreparedCore{}, err
 	}
@@ -143,7 +143,7 @@ func (preparer *ActiveMihomoPreparer) PrepareActive(ctx context.Context) (engine
 	if endpointManager == nil {
 		endpointManager = NewEndpointBypassManager(preparer.Layout, preparer.State)
 	}
-	capture.EndpointBypassCIDRs, err = endpointManager.Prepare(ctx, runtimeSource)
+	capture.EndpointBypassCIDRs, err = endpointManager.PrepareMihomo(ctx, runtimeSource, !explicit)
 	if err != nil {
 		return engine.PreparedCore{}, fmt.Errorf("prepare endpoint bypass policy: %w", err)
 	}
@@ -156,26 +156,11 @@ func (preparer *ActiveMihomoPreparer) PrepareActive(ctx context.Context) (engine
 	if runtimeDir == "" {
 		runtimeDir = os.TempDir()
 	}
-	driverSourcePath := sourcePath
-	if !bytes.Equal(runtimeSource, source) {
-		temporary, createErr := os.CreateTemp(runtimeDir, "boxctl-subscriptions-*.yaml")
-		if createErr != nil {
-			return engine.PreparedCore{}, fmt.Errorf("create subscription config: %w", createErr)
-		}
-		driverSourcePath = temporary.Name()
-		defer os.Remove(driverSourcePath)
-		if chmodErr := temporary.Chmod(0o600); chmodErr != nil {
-			_ = temporary.Close()
-			return engine.PreparedCore{}, chmodErr
-		}
-		if _, writeErr := temporary.Write(runtimeSource); writeErr != nil {
-			_ = temporary.Close()
-			return engine.PreparedCore{}, writeErr
-		}
-		if closeErr := temporary.Close(); closeErr != nil {
-			return engine.PreparedCore{}, closeErr
-		}
+	driverSourcePath, err := writeConfigSnapshot(runtimeDir, "boxctl-mihomo-source-*.yaml", runtimeSource)
+	if err != nil {
+		return engine.PreparedCore{}, err
 	}
+	defer os.Remove(driverSourcePath)
 	prepared, err := preparer.Config.Prepare(ctx, engine.PrepareRequest{
 		BinaryPath:       binaryPath,
 		SourceConfigPath: driverSourcePath,
@@ -186,8 +171,107 @@ func (preparer *ActiveMihomoPreparer) PrepareActive(ctx context.Context) (engine
 	})
 	if err == nil {
 		prepared.SourceConfigPath = sourcePath
+		prepared.SourceRevision = contentRevision(source)
 	}
 	return prepared, err
+}
+
+// PublishProfileState publishes only the profile-derived shared state after a
+// ProfileSwitcher commit is durable. It deliberately does not prepare another
+// runtime generation or touch deterministic tmpfs provider files used by the
+// already running target.
+func (preparer *ActiveMihomoPreparer) PublishProfileState(ctx context.Context, profile state.ActiveProfile, expectedRevision string) error {
+	if preparer == nil || preparer.Config == nil {
+		return errors.New("mihomo preparer is not initialized")
+	}
+	if profile.Engine == "" {
+		profile.Engine = state.EngineMihomo
+	}
+	if profile.Engine != state.EngineMihomo {
+		return fmt.Errorf("%w: profile engine %q is not Mihomo", engine.ErrUnsupported, profile.Engine)
+	}
+	sourcePath, err := preparer.explicitSourcePath(profile)
+	if err != nil {
+		return err
+	}
+	source, err := readBoundedRegular(sourcePath, 32<<20)
+	if err != nil {
+		return fmt.Errorf("read committed Mihomo profile: %w", err)
+	}
+	if !validProfileRevision(expectedRevision) || contentRevision(source) != expectedRevision {
+		return errors.New("committed Mihomo profile changed before shared state publication")
+	}
+	managed, err := configpkg.InspectMihomo(source)
+	if err != nil {
+		return fmt.Errorf("inspect committed Mihomo profile: %w", err)
+	}
+	runtimeSettings, err := LoadRuntimeSettings(preparer.State)
+	if err != nil {
+		return fmt.Errorf("load runtime settings: %w", err)
+	}
+	if _, err := preparer.managedCaptureSettings(source, managed, runtimeSettings, true); err != nil {
+		return err
+	}
+	runtimeSource, err := preparer.injectProxySubscriptions(source)
+	if err != nil {
+		return err
+	}
+	endpointManager := preparer.Endpoints
+	if endpointManager == nil {
+		endpointManager = NewEndpointBypassManager(preparer.Layout, preparer.State)
+	}
+	if _, err := endpointManager.PrepareMihomo(ctx, runtimeSource, true); err != nil {
+		return fmt.Errorf("publish endpoint bypass policy: %w", err)
+	}
+	return nil
+}
+
+func (preparer *ActiveMihomoPreparer) managedCaptureSettings(source []byte, managed configpkg.MihomoManagedValues, runtimeSettings RuntimeSettings, persist bool) (ManagedMihomoSettings, error) {
+	managedSettings, err := managedRuntimeSettings(managed)
+	if err != nil {
+		return ManagedMihomoSettings{}, err
+	}
+	if !managedSettings.DNSFakeIP {
+		return managedSettings, nil
+	}
+	fakeIPManager := preparer.FakeIP
+	if fakeIPManager == nil {
+		fakeIPManager = NewFakeIPCaptureManager(preparer.Layout)
+	}
+	options := FakeIPCaptureOptions{IncludeExternalIPProviders: runtimeSettings.AutoFakeIPIncludeExternalIPProviders}
+	var policy fakeIPCapturePolicy
+	if persist {
+		policy, err = fakeIPManager.PrepareWithOptions(source, runtimeSettings.AutoFakeIP, options)
+	} else {
+		policy, err = fakeIPManager.PreviewWithOptions(source, runtimeSettings.AutoFakeIP, options)
+	}
+	if err != nil {
+		return ManagedMihomoSettings{}, fmt.Errorf("prepare fake-IP destination policy: %w", err)
+	}
+	managedSettings.DNSFakeIP = policy.Selective
+	managedSettings.FakeIPFilterMode = policy.FilterMode
+	managedSettings.FakeIPRanges = append([]netip.Prefix(nil), policy.FakeIPRanges...)
+	managedSettings.AdditionalCaptureCIDRs = append([]netip.Prefix(nil), policy.Document.Effective...)
+	return managedSettings, nil
+}
+
+func (preparer *ActiveMihomoPreparer) injectProxySubscriptions(source []byte) ([]byte, error) {
+	runtimeSource := source
+	if preparer.Subscriptions == nil {
+		return runtimeSource, nil
+	}
+	providers, err := preparer.Subscriptions.EnabledProviderSpecs()
+	if err != nil {
+		return nil, fmt.Errorf("load proxy subscriptions: %w", err)
+	}
+	if len(providers) == 0 {
+		return runtimeSource, nil
+	}
+	runtimeSource, err = configpkg.InjectMihomoProxyProviders(source, providers)
+	if err != nil {
+		return nil, fmt.Errorf("inject proxy subscriptions: %w", err)
+	}
+	return runtimeSource, nil
 }
 
 func (preparer *ActiveMihomoPreparer) applyRuntimeProviderSettings(ctx context.Context, source []byte, settings RuntimeSettings, copyExisting bool) ([]byte, error) {
@@ -396,6 +480,19 @@ func managedMihomoController(managed configpkg.MihomoManagedValues) engine.Contr
 		controller.Secret = managed.Secret.Reveal()
 	}
 	return controller
+}
+
+func (preparer *ActiveMihomoPreparer) explicitSourcePath(active state.ActiveProfile) (string, error) {
+	entries, err := preparer.Profiles.List()
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if entry.ActiveProfile == active {
+			return entry.Path, nil
+		}
+	}
+	return "", fs.ErrNotExist
 }
 
 func (preparer *ActiveMihomoPreparer) sourcePath(active state.ActiveProfile, activeErr error) (string, error) {

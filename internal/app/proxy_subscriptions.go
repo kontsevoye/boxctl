@@ -34,6 +34,7 @@ var proxySubscriptionIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
 
 type proxySubscriptionRecord struct {
 	ID                  string            `json:"id"`
+	Engine              string            `json:"engine,omitempty"`
 	Name                string            `json:"name"`
 	Enabled             bool              `json:"enabled"`
 	SourceURL           string            `json:"sourceUrl,omitempty"`
@@ -122,7 +123,7 @@ func (service *ProxySubscriptionsService) CreateProxySubscription(ctx context.Co
 		return web.ProxySubscription{}, err
 	}
 	for _, item := range registry.Items {
-		if strings.EqualFold(item.Name, record.Name) {
+		if item.Engine == record.Engine && strings.EqualFold(item.Name, record.Name) {
 			return web.ProxySubscription{}, &web.PublicError{Status: http.StatusConflict, Code: "subscription_exists", Message: "A proxy subscription with this name already exists"}
 		}
 	}
@@ -159,7 +160,7 @@ func (service *ProxySubscriptionsService) UpdateProxySubscription(ctx context.Co
 			return web.ProxySubscription{}, err
 		}
 		for other, item := range registry.Items {
-			if other != index && strings.EqualFold(item.Name, name) {
+			if other != index && item.Engine == record.Engine && strings.EqualFold(item.Name, name) {
 				return web.ProxySubscription{}, &web.PublicError{Status: http.StatusConflict, Code: "subscription_exists", Message: "A proxy subscription with this name already exists"}
 			}
 		}
@@ -405,7 +406,7 @@ func (service *ProxySubscriptionsService) EnabledProviderSpecs() ([]configpkg.Mi
 	}
 	result := make([]configpkg.MihomoProxyProvider, 0, len(registry.Items))
 	for _, item := range registry.Items {
-		if !item.Enabled {
+		if !item.Enabled || item.Engine != state.EngineMihomo {
 			continue
 		}
 		if item.SourceURL == "" {
@@ -476,6 +477,9 @@ func (service *ProxySubscriptionsService) load() (proxySubscriptionRegistry, err
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return proxySubscriptionRegistry{}, errors.New("proxy subscription registry has trailing data")
 	}
+	for index := range registry.Items {
+		registry.Items[index].Engine = normalizedEngine(registry.Items[index].Engine)
+	}
 	if err := validateProxySubscriptionRegistry(registry); err != nil {
 		return proxySubscriptionRegistry{}, err
 	}
@@ -486,6 +490,9 @@ func validateProxySubscriptionRegistry(registry proxySubscriptionRegistry) error
 	ids := make(map[string]struct{}, len(registry.Items))
 	names := make(map[string]struct{}, len(registry.Items))
 	for _, item := range registry.Items {
+		if item.Engine != state.EngineMihomo {
+			return errors.New("proxy subscription registry contains an unsupported engine")
+		}
 		if !proxySubscriptionIDPattern.MatchString(item.ID) {
 			return errors.New("proxy subscription registry contains an invalid id")
 		}
@@ -496,7 +503,7 @@ func validateProxySubscriptionRegistry(registry proxySubscriptionRegistry) error
 		if err := validateSubscriptionName(item.Name); err != nil {
 			return errors.New("proxy subscription registry contains an invalid name")
 		}
-		foldedName := strings.ToLower(item.Name)
+		foldedName := item.Engine + "\x00" + strings.ToLower(item.Name)
 		if _, duplicate := names[foldedName]; duplicate {
 			return errors.New("proxy subscription registry contains duplicate names")
 		}
@@ -546,6 +553,13 @@ func (service *ProxySubscriptionsService) changed(ctx context.Context) error {
 }
 
 func newProxySubscriptionRecord(draft web.ProxySubscriptionDraft) (proxySubscriptionRecord, error) {
+	engineName := normalizedEngine(draft.Engine)
+	if engineName != state.EngineMihomo {
+		return proxySubscriptionRecord{}, &web.PublicError{
+			Status: http.StatusConflict, Code: "subscription_engine_unsupported",
+			Message: "Managed proxy subscriptions are not supported by this engine; add native outbounds to its JSON profile",
+		}
+	}
 	name := strings.TrimSpace(draft.Name)
 	if err := validateSubscriptionName(name); err != nil {
 		return proxySubscriptionRecord{}, err
@@ -570,7 +584,7 @@ func newProxySubscriptionRecord(draft web.ProxySubscriptionDraft) (proxySubscrip
 		return proxySubscriptionRecord{}, errors.New("generate proxy subscription id")
 	}
 	return proxySubscriptionRecord{
-		ID: hex.EncodeToString(idBytes), Name: name, Enabled: true,
+		ID: hex.EncodeToString(idBytes), Engine: engineName, Name: name, Enabled: true,
 		SourceURL: urlValue, ShareLinks: links, Headers: headers, UpdateIntervalHours: interval,
 		IntervalExplicit: draft.UpdateIntervalHours != nil,
 	}, nil
@@ -614,7 +628,7 @@ func subscriptionDTO(record proxySubscriptionRecord) web.ProxySubscription {
 	}
 	sort.Strings(headerNames)
 	result := web.ProxySubscription{
-		ID: record.ID, Name: record.Name, ProviderName: providerName(record.ID), Enabled: record.Enabled,
+		ID: record.ID, Engine: normalizedEngine(record.Engine), Name: record.Name, ProviderName: providerName(record.ID), Enabled: record.Enabled,
 		SourceKind: "remote", HeaderNames: headerNames, UpdateIntervalHours: record.UpdateIntervalHours,
 		UpdateIntervalAuto: !record.IntervalExplicit,
 		ProxyCount:         record.ProxyCount, UploadBytes: record.UploadBytes, DownloadBytes: record.DownloadBytes,

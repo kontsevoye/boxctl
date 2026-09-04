@@ -17,6 +17,9 @@ type StatusService struct {
 	Lifecycle *Lifecycle
 	Profiles  state.ProfileStore
 	Control   engine.Control
+	Host      *EngineHost
+	Revisions *ProfileRevisionStore
+	Switcher  *ProfileSwitcher
 	StartedAt time.Time
 
 	ReadProcessResources func(int) (processResourceSnapshot, error)
@@ -30,9 +33,23 @@ func (service *StatusService) Status(ctx context.Context) (web.StatusSnapshot, e
 		started = time.Now().UTC()
 	}
 	snapshot := service.Lifecycle.Snapshot()
-	coreName := snapshot.Prepared.Engine
+	selectedEngine := state.EngineMihomo
+	var activeProfile *state.ActiveProfile
+	if active, err := service.Profiles.Current(); err == nil {
+		selectedEngine = active.Engine
+		activeProfile = &active
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return web.StatusSnapshot{}, err
+	}
+	runningEngine := snapshot.Prepared.Engine
+	if service.Host != nil {
+		if running := service.Host.RunningEngine(); running != "" {
+			runningEngine = running
+		}
+	}
+	coreName := runningEngine
 	if coreName == "" {
-		coreName = state.EngineMihomo
+		coreName = selectedEngine
 	}
 	coreState := snapshot.State
 	if coreState == "" {
@@ -47,6 +64,14 @@ func (service *StatusService) Status(ctx context.Context) (web.StatusSnapshot, e
 			Name: coreName, Version: snapshot.Health.Version, State: string(coreState),
 			Since: snapshot.StartedAt,
 		},
+		SelectedEngine: selectedEngine,
+		RunningEngine:  runningEngine,
+	}
+	if service.Host != nil {
+		result.RuntimeEpoch = service.Host.RuntimeEpoch()
+	}
+	if service.Switcher != nil {
+		result.Transition = service.Switcher.CurrentPhase()
 	}
 	if coreState == LifecycleRunning && !snapshot.StartedAt.IsZero() {
 		result.CoreUptimeSeconds = elapsedSeconds(now, snapshot.StartedAt)
@@ -54,11 +79,31 @@ func (service *StatusService) Status(ctx context.Context) (web.StatusSnapshot, e
 	if snapshot.LastError != "" {
 		result.Core.LastError = "A lifecycle operation failed; see the authenticated system log"
 	}
-	if active, err := service.Profiles.Current(); err == nil {
-		result.ActiveProfile = &web.ProfileRef{ID: profileID(active), Name: active.Name}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return web.StatusSnapshot{}, err
+	if activeProfile != nil {
+		result.ActiveProfile = &web.ProfileRef{ID: profileID(*activeProfile), Name: activeProfile.Name, Engine: activeProfile.Engine}
+		if service.Revisions != nil {
+			revision, pending, err := service.Revisions.Pending(*activeProfile)
+			if err != nil {
+				return web.StatusSnapshot{}, err
+			}
+			// The content digest is authoritative. This also keeps status honest
+			// if a previous process died between publishing a profile and updating
+			// the convenience pendingRevision field.
+			if content, contentErr := service.Profiles.Get(*activeProfile); contentErr == nil {
+				current := contentRevision(content)
+				pending = pending || (revision.AppliedRevision != "" && revision.AppliedRevision != current)
+			} else {
+				return web.StatusSnapshot{}, contentErr
+			}
+			if pending {
+				result.PendingChanges = append(result.PendingChanges, "profile_config")
+			}
+		}
 	}
+	if coreState == LifecycleRunning && runningEngine != "" && runningEngine != selectedEngine {
+		result.PendingChanges = append(result.PendingChanges, "engine_selection")
+	}
+	result.RestartRequired = coreState == LifecycleRunning && len(result.PendingChanges) > 0
 	if service.Control != nil && coreState == LifecycleRunning {
 		connections, err := service.Control.Connections(ctx)
 		if err == nil {

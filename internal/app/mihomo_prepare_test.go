@@ -3,15 +3,18 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	configpkg "github.com/kontsevoye/boxctl/internal/config"
 	"github.com/kontsevoye/boxctl/internal/engine"
+	"github.com/kontsevoye/boxctl/internal/fakeip"
 	"github.com/kontsevoye/boxctl/internal/state"
 )
 
@@ -75,11 +78,24 @@ dns:
 	if prepared.Capture.TCP.Port != 17894 || prepared.Capture.DNS.Port != 17874 || len(prepared.Capture.FakeIPRanges) != 1 {
 		t.Fatalf("capture = %+v", prepared.Capture)
 	}
+	if len(prepared.Capture.TUNAddresses) != 0 || prepared.Capture.TUNMTU != 0 {
+		t.Fatalf("Mihomo capture unexpectedly contains sing-box TUN settings: %+v", prepared.Capture)
+	}
 	if recorder.request.Controller.Secret != "keep-me" || recorder.request.Controller.Listen != defaultMihomoControllerListen {
 		t.Fatalf("controller = %+v", recorder.request.Controller)
 	}
-	if recorder.request.SourceConfigPath != filepath.Join(root, "config.yaml") {
-		t.Fatalf("source = %s", recorder.request.SourceConfigPath)
+	originalPath := filepath.Join(root, "config.yaml")
+	if recorder.request.SourceConfigPath == originalPath || !strings.HasPrefix(filepath.Base(recorder.request.SourceConfigPath), "boxctl-mihomo-source-") {
+		t.Fatalf("driver source snapshot = %s", recorder.request.SourceConfigPath)
+	}
+	if !bytes.Equal(recorder.source, []byte(configuration)) {
+		t.Fatalf("driver source snapshot = %q, want exact original config", recorder.source)
+	}
+	if prepared.SourceConfigPath != originalPath {
+		t.Fatalf("prepared source = %s, want %s", prepared.SourceConfigPath, originalPath)
+	}
+	if prepared.SourceRevision != contentRevision([]byte(configuration)) {
+		t.Fatalf("prepared source revision = %q", prepared.SourceRevision)
 	}
 }
 
@@ -234,6 +250,220 @@ rules:
 	}
 	if !reflect.DeepEqual(prepared.Capture.EndpointBypassCIDRs, want) {
 		t.Fatalf("endpoint bypass capture = %v, want %v", prepared.Capture.EndpointBypassCIDRs, want)
+	}
+}
+
+func TestActiveMihomoExplicitPreflightStagesSharedAUTOAndEndpointLKG(t *testing.T) {
+	fixture := newMihomoPreflightStateFixture(t)
+	ctx := context.Background()
+
+	prepared, err := fixture.preparer.PrepareProfile(ctx, fixture.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.CleanupPreparedRuntime(prepared)
+	if got := endpointPrefixStrings(prepared.Capture.Destinations.CIDRs); !reflect.DeepEqual(got, []string{"198.18.0.0/15", "203.0.113.0/24"}) {
+		t.Fatalf("staged fake-IP capture = %v", got)
+	}
+	if got := endpointPrefixStrings(prepared.Capture.EndpointBypassCIDRs); !reflect.DeepEqual(got, []string{"198.51.100.7/32"}) {
+		t.Fatalf("staged endpoint bypass = %v", got)
+	}
+	fixture.assertSharedStateUnchanged(t)
+
+	if err := fixture.profiles.Activate(ctx, fixture.target); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &EnginePreparer{Profiles: fixture.profiles, Preparers: map[string]ExplicitProfilePreparer{
+		state.EngineMihomo: fixture.preparer,
+	}}
+	active, err := dispatcher.PrepareActive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.CleanupPreparedRuntime(active)
+	if current := fixture.readFakeIPState(t); bytes.Equal(current, fixture.fakeIPBefore) {
+		t.Fatal("active preparation did not publish the candidate AUTO fake-IP state")
+	}
+	if current := fixture.readEndpointState(t); bytes.Equal(current, fixture.endpointBefore) {
+		t.Fatal("active preparation did not publish the candidate endpoint LKG state")
+	}
+}
+
+func TestFailedMihomoProfileSwitchLeavesSharedAUTOAndEndpointLKGUntouched(t *testing.T) {
+	fixture := newMihomoPreflightStateFixture(t)
+	ctx := context.Background()
+	enginePreparer := &EnginePreparer{Profiles: fixture.profiles, Preparers: map[string]ExplicitProfilePreparer{
+		state.EngineMihomo: fixture.preparer,
+	}}
+	lifecycle := &Lifecycle{
+		Preparer: enginePreparer, Core: profileSwitchCore{}, Activation: profileSwitchActivation{},
+		snap: LifecycleSnapshot{State: LifecycleStopped},
+	}
+	switcher := &ProfileSwitcher{
+		State: fixture.store, Profiles: fixture.profiles, Preparer: enginePreparer, Lifecycle: lifecycle,
+		Revisions: &recordingProfileRevisionApplier{err: errors.New("revision registry unavailable")},
+	}
+
+	if err := switcher.Switch(ctx, fixture.target, true); err == nil {
+		t.Fatal("switch unexpectedly succeeded")
+	}
+	fixture.assertSharedStateUnchanged(t)
+	active, err := fixture.profiles.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active != fixture.old {
+		t.Fatalf("active profile = %+v, want previous %+v", active, fixture.old)
+	}
+}
+
+func TestSuccessfulMihomoProfileSwitchPublishesStagedAUTOAndEndpointLKG(t *testing.T) {
+	fixture := newMihomoPreflightStateFixture(t)
+	ctx := context.Background()
+	enginePreparer := &EnginePreparer{Profiles: fixture.profiles, Preparers: map[string]ExplicitProfilePreparer{
+		state.EngineMihomo: fixture.preparer,
+	}}
+	lifecycle := &Lifecycle{
+		Preparer: enginePreparer, Core: profileSwitchCore{}, Activation: profileSwitchActivation{},
+		snap: LifecycleSnapshot{State: LifecycleStopped},
+	}
+	switcher := &ProfileSwitcher{
+		State: fixture.store, Profiles: fixture.profiles, Preparer: enginePreparer, Lifecycle: lifecycle,
+	}
+
+	if err := switcher.Switch(ctx, fixture.target, true); err != nil {
+		t.Fatal(err)
+	}
+	if current := fixture.readFakeIPState(t); bytes.Equal(current, fixture.fakeIPBefore) {
+		t.Fatal("successful switch did not publish staged AUTO fake-IP state")
+	}
+	if current := fixture.readEndpointState(t); bytes.Equal(current, fixture.endpointBefore) {
+		t.Fatal("successful switch did not publish staged endpoint LKG state")
+	}
+	if _, err := fixture.store.Read(profileTransitionPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("completed switch journal remained: %v", err)
+	}
+}
+
+type mihomoPreflightStateFixture struct {
+	layout         state.Layout
+	store          state.Store
+	profiles       state.ProfileStore
+	preparer       *ActiveMihomoPreparer
+	old            state.ActiveProfile
+	target         state.ActiveProfile
+	fakeIPBefore   []byte
+	endpointBefore []byte
+}
+
+func newMihomoPreflightStateFixture(t *testing.T) mihomoPreflightStateFixture {
+	t.Helper()
+	ctx := context.Background()
+	root := t.TempDir()
+	layout, err := state.NewLayout(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(layout.EnginesDir, state.EngineMihomo), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.EnginesDir, state.EngineMihomo, state.EngineMihomo), []byte("fake"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := state.NewProfileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := state.ActiveProfile{Name: "old", Engine: state.EngineMihomo}
+	target := state.ActiveProfile{Name: "target", Engine: state.EngineMihomo}
+	if err := profiles.Create(ctx, old, []byte("mode: direct\nrules:\n  - MATCH,DIRECT\n")); err != nil {
+		t.Fatal(err)
+	}
+	targetSource := []byte(`mode: rule
+dns:
+  enable: true
+  enhanced-mode: fake-ip
+  fake-ip-filter-mode: whitelist
+proxies:
+  - name: candidate
+    type: socks5
+    server: candidate.example
+    port: 1080
+rules:
+  - IP-CIDR,203.0.113.0/24,PROXY
+  - MATCH,DIRECT
+`)
+	if err := profiles.Create(ctx, target, targetSource); err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.Activate(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSettings(settingsRelativePath, state.Settings{"AUTO_FAKEIP_WHITELIST": "true"}); err != nil {
+		t.Fatal(err)
+	}
+	fakeIPStore := &fakeip.Store{Directory: layout.LocalRulesDir}
+	empty, err := fakeIPStore.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	generatedAt := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+	if _, err := fakeIPStore.ReplaceGeneratedWithScope(
+		[]netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}, empty.Revision, generatedAt, fakeip.AutoScopeLocalOnly,
+	); err != nil {
+		t.Fatal(err)
+	}
+	seedCache := endpointBypassCache{Version: 1, Hosts: map[string][]string{
+		endpointHostKey("old.example"): {"192.0.2.9"},
+	}}
+	if err := store.WriteJSON(endpointBypassCachePath, seedCache, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preparer, err := NewActiveMihomoPreparer(root, &recordingConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparer.FakeIP.Now = func() time.Time { return generatedAt.Add(time.Hour) }
+	preparer.Endpoints.Resolver = &endpointResolverStub{addresses: map[string][]netip.Addr{
+		"candidate.example": {netip.MustParseAddr("198.51.100.7")},
+	}, errors: map[string]error{}}
+	fixture := mihomoPreflightStateFixture{
+		layout: layout, store: store, profiles: profiles, preparer: preparer, old: old, target: target,
+	}
+	fixture.fakeIPBefore = fixture.readFakeIPState(t)
+	fixture.endpointBefore = fixture.readEndpointState(t)
+	return fixture
+}
+
+func (fixture mihomoPreflightStateFixture) readFakeIPState(t *testing.T) []byte {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(fixture.layout.LocalRulesDir, fakeip.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
+func (fixture mihomoPreflightStateFixture) readEndpointState(t *testing.T) []byte {
+	t.Helper()
+	content, err := fixture.store.Read(endpointBypassCachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
+func (fixture mihomoPreflightStateFixture) assertSharedStateUnchanged(t *testing.T) {
+	t.Helper()
+	if current := fixture.readFakeIPState(t); !bytes.Equal(current, fixture.fakeIPBefore) {
+		t.Fatalf("explicit preflight changed shared AUTO state:\n%s", current)
+	}
+	if current := fixture.readEndpointState(t); !bytes.Equal(current, fixture.endpointBefore) {
+		t.Fatalf("explicit preflight changed shared endpoint LKG state:\n%s", current)
 	}
 }
 

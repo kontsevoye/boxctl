@@ -59,7 +59,7 @@ func TestInitScriptReexecsManagerWithoutStoppingCore(t *testing.T) {
 		`HANDOFF_MARKER="${BOXCTL_ROOT}/.boxctl/manager-handoff.json"`,
 		`EXTRA_COMMANDS="manager_handoff"`,
 		`procd_send_signal boxctl '*' 12`,
-		`self-update handoff: preserving Mihomo and active dataplane`,
+		`self-update handoff: preserving the active proxy core and dataplane`,
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("boxctl init script is missing %q", required)
@@ -106,14 +106,16 @@ func TestNativePackageUsesOpenWrtBuildSystem(t *testing.T) {
 	packageMakefile := readProjectFile(t, "packaging/openwrt/Makefile")
 	for _, required := range []string{
 		"include $(INCLUDE_DIR)/package.mk",
-		"BOXCTL_RUNTIME_DEPENDS:=+ca-bundle +dnsmasq +firewall4 +ip-full +kmod-nft-tproxy +kmod-tun +nftables-json +procd +ubus +uci",
-		"BOXCTL_RUNTIME_EXTRA_DEPENDS:=ca-bundle (>=0), dnsmasq (>=0), firewall4 (>=0), ip-full (>=0), kmod-nft-tproxy (>=0), kmod-tun (>=0), nftables-json (>=0), procd (>=0), ubus (>=0), uci (>=0)",
+		"BOXCTL_RUNTIME_DEPENDS:=+ca-bundle +dnsmasq +firewall4 +ip-full +kmod-inet-diag +kmod-nft-tproxy +kmod-tun +nftables-json +procd +ubus +uci",
+		"BOXCTL_RUNTIME_EXTRA_DEPENDS:=ca-bundle (>=0), dnsmasq (>=0), firewall4 (>=0), ip-full (>=0), kmod-inet-diag (>=0), kmod-nft-tproxy (>=0), kmod-tun (>=0), nftables-json (>=0), procd (>=0), ubus (>=0), uci (>=0)",
 		"ifeq ($(BOXCTL_PREBUILT),1)",
 		"define Package/boxctl/preinst",
 		`[ -e "$${root}/bin/boxctl" ] || fresh=1`,
 		`start-stopped-until-first-success`,
 		`"$${root}/configs"`,
+		`"$${root}/engines/sing-box"`,
 		`$(1)/opt/boxctl/configs`,
+		`$(1)/opt/boxctl/engines/sing-box`,
 		`chmod 0700 $(1)/opt/boxctl $(1)/opt/boxctl/.boxctl $(1)/opt/boxctl/.install`,
 		"$(INSTALL_BIN) $(BOXCTL_BINARY) $(1)/opt/boxctl/bin/boxctl",
 		"define Package/boxctl/conffiles",
@@ -148,6 +150,7 @@ func TestNativePackageUsesOpenWrtBuildSystem(t *testing.T) {
 		"adbdump --format json",
 		`"/usr/share/licenses/boxctl/LICENSE": 0o644`,
 		`"/etc/config/boxctl": 0o600`,
+		`"kmod-inet-diag",`,
 	} {
 		if !strings.Contains(buildScript, required) {
 			t.Errorf("SDK build script is missing %q", required)
@@ -204,12 +207,17 @@ func TestInstallerSupportsFreshInstallAndUpdate(t *testing.T) {
 		`if service_running; then`,
 		`install_atomic "$SOURCE_BINARY"`,
 		`start-stopped-until-first-success`,
+		`"${ROOT}/engines/sing-box"`,
+		`"${ROOT}/configs"`,
 		`wait_service_running`,
 		`rollback_on_error`,
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("installer is missing %q", required)
 		}
+	}
+	if strings.Contains(text, `"${ROOT}/profiles"`) {
+		t.Error("portable installer creates the obsolete profiles directory")
 	}
 	if strings.Index(text, `"$SOURCE_BINARY" version`) > strings.Index(text, `if service_running; then`) {
 		t.Fatal("binary preflight runs after the service is stopped")

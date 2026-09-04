@@ -176,7 +176,10 @@ func (service *MihomoUpdateService) InstallCoreUpdate(ctx context.Context) (web.
 	if stateBefore != LifecycleRunning && stateBefore != LifecycleStopped && stateBefore != "" && !freshInstallAfterBootstrapFailure {
 		return web.CoreUpdateResult{}, errors.Join(web.ErrConflict, errors.New("lifecycle operation is already in progress"))
 	}
-	wasRunning := stateBefore == LifecycleRunning
+	// Updating an installed but unselected Mihomo binary must not interrupt a
+	// different running engine. Only the runtime which owns the target binary
+	// participates in the stop/swap/restart transaction.
+	wasRunning := stateBefore == LifecycleRunning && snapshotBefore.Prepared.Engine == state.EngineMihomo
 	if wasRunning {
 		if err := service.Lifecycle.stopLocked(transactionContext); err != nil {
 			return web.CoreUpdateResult{}, fmt.Errorf("stop Mihomo before update: %w", err)
@@ -404,6 +407,16 @@ func (validator *stagedMihomoValidator) ValidateBinary(ctx context.Context, bina
 	if validator == nil || validator.Preparer == nil {
 		return errors.New("staged Mihomo validator is not initialized")
 	}
+	active, activeErr := validator.Preparer.Profiles.Current()
+	if activeErr == nil && active.Engine != "" && active.Engine != state.EngineMihomo {
+		// There is no selected Mihomo configuration to validate while another
+		// engine is active. Still execute the candidate and require native Mihomo
+		// version output before it may replace the inactive binary.
+		return validator.validateVersion(ctx, binaryPath)
+	}
+	if activeErr != nil && !errors.Is(activeErr, fs.ErrNotExist) {
+		return fmt.Errorf("read active profile for staged Mihomo validation: %w", activeErr)
+	}
 	candidate := *validator.Preparer
 	candidate.BinaryOverride = binaryPath
 	prepared, err := candidate.PrepareActive(ctx)
@@ -411,22 +424,26 @@ func (validator *stagedMihomoValidator) ValidateBinary(ctx context.Context, bina
 		// Clean install has no profile yet. Digest, gzip and ELF checks have
 		// already succeeded; execute the candidate and require a parseable native
 		// version before it can become the first installed core.
-		if validator.Versioner == nil {
-			return errors.New("staged Mihomo version validator is unavailable")
-		}
-		version, versionErr := validator.Versioner.Version(ctx, binaryPath)
-		if versionErr != nil {
-			return versionErr
-		}
-		if extractMihomoVersion(version) == "" {
-			return errors.New("staged Mihomo version output is invalid")
-		}
-		return nil
+		return validator.validateVersion(ctx, binaryPath)
 	}
 	if err != nil {
 		return err
 	}
 	engine.CleanupPreparedRuntime(prepared)
+	return nil
+}
+
+func (validator *stagedMihomoValidator) validateVersion(ctx context.Context, binaryPath string) error {
+	if validator.Versioner == nil {
+		return errors.New("staged Mihomo version validator is unavailable")
+	}
+	version, err := validator.Versioner.Version(ctx, binaryPath)
+	if err != nil {
+		return err
+	}
+	if extractMihomoVersion(version) == "" {
+		return errors.New("staged Mihomo version output is invalid")
+	}
 	return nil
 }
 

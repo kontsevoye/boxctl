@@ -33,6 +33,8 @@ type RuntimeSettings struct {
 	Included                             []string
 	Excluded                             []string
 	TUNStack                             string
+	TUNAddress                           netip.Prefix
+	TUNMTU                               uint32
 	ReservedNetworks                     []string
 	ReservedNetworksConfigured           bool
 	BypassSources                        []string
@@ -65,6 +67,8 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		DNSMode:             openwrt.DNSUpstream,
 		InterfaceMode:       "exclude",
 		TUNStack:            "system",
+		TUNAddress:          netip.MustParsePrefix("172.19.0.1/30"),
+		TUNMTU:              1500,
 		ReservedNetworks:    append([]string(nil), plan.BypassCIDRs...),
 		RejectQUIC:          true,
 		AutoDetectWAN:       true,
@@ -139,6 +143,20 @@ func DecodeRuntimeSettings(raw state.Settings) (RuntimeSettings, error) {
 	result.Excluded = splitList(raw["EXCLUDED_INTERFACES"])
 	if value := strings.TrimSpace(raw["TUN_STACK"]); value != "" {
 		result.TUNStack = value
+	}
+	if value := strings.TrimSpace(raw["SINGBOX_TUN_ADDRESS"]); value != "" {
+		prefix, parseErr := netip.ParsePrefix(value)
+		if parseErr != nil || !prefix.Addr().Is4() || prefix.Bits() < 1 || prefix.Bits() > 30 {
+			return RuntimeSettings{}, fmt.Errorf("SINGBOX_TUN_ADDRESS must be an IPv4 interface prefix")
+		}
+		result.TUNAddress = prefix
+	}
+	if value := strings.TrimSpace(raw["SINGBOX_TUN_MTU"]); value != "" {
+		parsed, parseErr := strconv.ParseUint(value, 10, 32)
+		if parseErr != nil || parsed < 576 || parsed > 9000 {
+			return RuntimeSettings{}, fmt.Errorf("SINGBOX_TUN_MTU must be between 576 and 9000")
+		}
+		result.TUNMTU = uint32(parsed)
 	}
 	switch result.TUNStack {
 	case "system", "gvisor", "mixed":

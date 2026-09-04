@@ -22,17 +22,54 @@ export interface CoreHealth {
   lastError?: string
 }
 
+export type EngineID = 'mihomo' | 'sing-box'
+
+export interface EngineManagement {
+  remoteProfiles: boolean
+  proxySubscriptions: boolean
+  localRuleLists: boolean
+  fakeIPCapture: boolean
+  updates: boolean
+  externalDashboard: boolean
+}
+
+export interface EngineInfo {
+  id: EngineID
+  displayName: string
+  configFormat: 'yaml' | 'json'
+  extensions: string[]
+  installed: boolean
+  installSource?: string
+  version?: string
+  compatible: boolean
+  selected: boolean
+  running: boolean
+  supportedCaptureModes: string[]
+  management: EngineManagement
+}
+
+export interface ProcessStats {
+  memoryBytes: number
+  cpuPercent?: number
+}
+
 export interface StatusSnapshot {
   healthy: boolean
   version?: string
   boxctlUptimeSeconds?: number
   coreUptimeSeconds?: number
   core: CoreHealth
-  activeProfile?: { id: string; name: string }
+  activeProfile?: { id: string; name: string; engine?: EngineID }
+  selectedEngine?: EngineID
+  runningEngine?: EngineID
+  runtimeEpoch?: number
+  restartRequired?: boolean
+  pendingChanges?: string[]
+  transition?: string
   traffic?: { uploadBytes: number; downloadBytes: number; connections: number }
   resources?: {
-    manager?: { memoryBytes: number; cpuPercent?: number }
-    core?: { memoryBytes: number; cpuPercent?: number }
+    manager?: ProcessStats
+    core?: ProcessStats
   }
   warnings?: Array<{ code: string; message: string; level?: string }>
 }
@@ -63,6 +100,8 @@ export interface Settings {
   autoDetectLAN?: boolean
   interceptRouterOutput?: boolean
   tunStack?: string
+  tunAddress?: string
+  tunMTU?: number
   rejectQUIC?: boolean
   reservedNetworks?: string[]
   bypassSources?: string[]
@@ -82,6 +121,7 @@ export interface Settings {
 }
 
 export interface CoreUpdateStatus {
+  engine?: EngineID
   currentVersion?: string
   latestVersion?: string
   channel: string
@@ -89,6 +129,7 @@ export interface CoreUpdateStatus {
 }
 
 export interface CoreUpdateResult {
+  engine?: EngineID
   previousVersion?: string
   currentVersion: string
   restarted: boolean
@@ -114,6 +155,7 @@ export interface ExternalDashboardOpen {
 
 export interface RuleList {
   id: string
+  engine?: EngineID
   name: string
   format: string
   enabled: boolean
@@ -131,6 +173,7 @@ export interface RuleListDocument extends RuleList {
 }
 
 export interface FakeIPWhitelist {
+  engine?: EngineID
   manualContent: string
   generatedCIDRs: string[]
   fakeIPRanges: string[]
@@ -164,7 +207,7 @@ export interface BackupExportOptions {
 export interface Profile {
   id: string
   name: string
-  engine: 'mihomo' | 'sing-box'
+  engine: EngineID
   sourceKind: string
   hasSource: boolean
   sourceEnabled: boolean
@@ -177,10 +220,15 @@ export interface Profile {
   nextUpdateAt?: string
   lastError?: string
   fingerprint?: string
+  pendingRevision?: string
+  appliedRevision?: string
+  pendingAt?: string
+  restartRequired?: boolean
 }
 
 export interface ProxySubscription {
   id: string
+  engine?: EngineID
   name: string
   providerName: string
   sourceKind: 'remote' | 'share-links'

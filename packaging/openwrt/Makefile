@@ -11,8 +11,8 @@ PKG_MAINTAINER:=boxctl maintainers
 
 include $(INCLUDE_DIR)/package.mk
 
-BOXCTL_RUNTIME_DEPENDS:=+ca-bundle +dnsmasq +firewall4 +ip-full +kmod-nft-tproxy +kmod-tun +nftables-json +procd +ubus +uci
-BOXCTL_RUNTIME_EXTRA_DEPENDS:=ca-bundle (>=0), dnsmasq (>=0), firewall4 (>=0), ip-full (>=0), kmod-nft-tproxy (>=0), kmod-tun (>=0), nftables-json (>=0), procd (>=0), ubus (>=0), uci (>=0)
+BOXCTL_RUNTIME_DEPENDS:=+ca-bundle +dnsmasq +firewall4 +ip-full +kmod-inet-diag +kmod-nft-tproxy +kmod-tun +nftables-json +procd +ubus +uci
+BOXCTL_RUNTIME_EXTRA_DEPENDS:=ca-bundle (>=0), dnsmasq (>=0), firewall4 (>=0), ip-full (>=0), kmod-inet-diag (>=0), kmod-nft-tproxy (>=0), kmod-tun (>=0), nftables-json (>=0), procd (>=0), ubus (>=0), uci (>=0)
 
 ifeq ($(BOXCTL_PREBUILT),1)
   BOXCTL_PACKAGE_DEPENDS:=
@@ -32,8 +32,8 @@ define Package/boxctl
 endef
 
 define Package/boxctl/description
- boxctl manages a Mihomo proxy core, nftables rules, policy routing, DNS,
- profiles, and its web interface on OpenWrt.
+ boxctl manages supported proxy cores, nftables rules, policy routing, DNS,
+ engine-native profiles, and its web interface on OpenWrt.
 endef
 
 define Package/boxctl/conffiles
@@ -54,6 +54,7 @@ fresh=0
 mkdir -p \
 	"$${root}/bin" \
 	"$${root}/engines/mihomo" \
+	"$${root}/engines/sing-box" \
 	"$${root}/.boxctl" \
 	"$${root}/configs" \
 	"$${root}/local-rules" \
@@ -73,6 +74,7 @@ define Package/boxctl/install
 	$(INSTALL_DIR) \
 		$(1)/opt/boxctl/bin \
 		$(1)/opt/boxctl/engines/mihomo \
+		$(1)/opt/boxctl/engines/sing-box \
 		$(1)/opt/boxctl/.boxctl \
 		$(1)/opt/boxctl/configs \
 		$(1)/opt/boxctl/local-rules \

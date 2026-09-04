@@ -45,8 +45,17 @@ export function coreControlAvailability(state: string) {
   }
 }
 
+type EngineStatusIdentity = Pick<StatusSnapshot, 'selectedEngine' | 'runtimeEpoch'>
+
+export function shouldRefreshEngineCatalog(previous: EngineStatusIdentity | undefined, next: EngineStatusIdentity, catalogSelected?: string): boolean {
+  if (!next.selectedEngine) return false
+  if (catalogSelected && catalogSelected !== next.selectedEngine) return true
+  if (!previous) return false
+  return previous.selectedEngine !== next.selectedEngine || previous.runtimeEpoch !== next.runtimeEpoch
+}
+
 export function Shell({ route, children }: { route: Route; children: ReactNode }) {
-  const { capabilities, refreshCapabilities } = useApp()
+  const { capabilities, engines, refreshCapabilities } = useApp()
   const { locale, setLocale, t } = useI18n()
   const items = navigationItems(t)
   const [controlBusy, setControlBusy] = useState('')
@@ -56,6 +65,8 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
   const drawerTrigger = useRef<HTMLButtonElement>(null)
   const drawerClose = useRef<HTMLButtonElement>(null)
   const drawerWasOpen = useRef(false)
+  const observedEngineIdentity = useRef<EngineStatusIdentity | undefined>(undefined)
+  const refreshedEngineIdentity = useRef('')
   const status = useQuery<StatusSnapshot>('/status')
   const coreState = status.data?.core.state ?? 'unknown'
   const controls = coreControlAvailability(coreState)
@@ -66,6 +77,19 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
     const timer = window.setInterval(status.reload, 2_000)
     return () => window.clearInterval(timer)
   }, [status.reload])
+
+  useEffect(() => {
+    const next = { selectedEngine: status.data?.selectedEngine, runtimeEpoch: status.data?.runtimeEpoch }
+    const previous = observedEngineIdentity.current
+    observedEngineIdentity.current = next
+    const catalogSelected = engines?.find((engine) => engine.selected)?.id
+    if (!shouldRefreshEngineCatalog(previous, next, catalogSelected)) return
+    const refreshKey = `${next.selectedEngine ?? ''}:${next.runtimeEpoch ?? ''}`
+    if (refreshedEngineIdentity.current === refreshKey) return
+    refreshedEngineIdentity.current = refreshKey
+    requestAppRefresh()
+    void refreshCapabilities()
+  }, [engines, refreshCapabilities, status.data?.runtimeEpoch, status.data?.selectedEngine])
 
   useEffect(() => {
     if (!drawerOpen) {

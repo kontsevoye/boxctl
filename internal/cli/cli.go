@@ -50,6 +50,23 @@ type SelfUpdateOptions struct {
 	ConfirmFullRestart func(string) (bool, error)
 }
 
+// ConfigValidateOptions selects the native validator for one engine. The
+// legacy ValidateConfig action remains the Mihomo default until application
+// wiring implements EngineConfigActions.
+type ConfigValidateOptions struct {
+	Engine string
+	File   string
+}
+
+// EngineInstallOptions describes an explicit offline engine install. Custom
+// files are never treated as an automatic-update channel.
+type EngineInstallOptions struct {
+	Engine string
+	Root   string
+	File   string
+	SHA256 string
+}
+
 // HotplugOptions describes an OpenWrt topology event. Interface is required
 // for a TUN netdev event so the application can compare it with the active,
 // validated capture plan instead of relying on a hard-coded device name.
@@ -69,6 +86,19 @@ type Actions interface {
 	ValidateConfig(context.Context, string) error
 	Doctor(context.Context, DoctorOptions) error
 	SelfUpdate(context.Context, SelfUpdateOptions) error
+}
+
+// EngineConfigActions is an optional application extension. Keeping it out of
+// Actions preserves source compatibility while the multi-engine application
+// coordinator is wired.
+type EngineConfigActions interface {
+	ValidateEngineConfig(context.Context, ConfigValidateOptions) error
+}
+
+// EngineInstallActions is an optional application extension for the verified,
+// versioned engine installer in internal/update.
+type EngineInstallActions interface {
+	InstallEngine(context.Context, EngineInstallOptions) error
 }
 
 // UsageError marks invalid command input. Callers should print the message and
@@ -175,14 +205,54 @@ func Execute(ctx context.Context, args []string, streams Streams, actions Action
 		return actions.SetPassword(ctx, streams.In, streams.Out)
 	case "config":
 		if len(args) < 2 || args[1] != "validate" {
-			return usage("usage: boxctl config validate [--file PATH]")
+			return usage("usage: boxctl config validate [--engine mihomo|sing-box] [--file PATH]")
 		}
 		fs := newFlagSet("config validate", streams.Err)
-		path := fs.String("file", state.DefaultRoot+"/config.yaml", "Mihomo configuration file")
+		engine := fs.String("engine", state.EngineMihomo, "configuration engine")
+		file := fs.String("file", "", "engine configuration file")
 		if err := parse(fs, args[2:]); err != nil {
 			return err
 		}
-		return actions.ValidateConfig(ctx, *path)
+		if *engine != state.EngineMihomo && *engine != state.EngineSingBox {
+			return usage("unsupported configuration engine %q", *engine)
+		}
+		if *file == "" {
+			*file = state.DefaultRoot + "/config.yaml"
+			if *engine == state.EngineSingBox {
+				*file = state.DefaultRoot + "/config.json"
+			}
+		}
+		if *engine == state.EngineMihomo {
+			return actions.ValidateConfig(ctx, *file)
+		}
+		engineActions, ok := actions.(EngineConfigActions)
+		if !ok {
+			return errors.New("sing-box configuration validation is not wired by the application")
+		}
+		return engineActions.ValidateEngineConfig(ctx, ConfigValidateOptions{Engine: *engine, File: *file})
+	case "engine":
+		if len(args) < 3 || args[1] != "install" {
+			return usage("usage: boxctl engine install sing-box --file PATH [--sha256 HEX] [--root PATH]")
+		}
+		options := EngineInstallOptions{Engine: args[2], Root: state.DefaultRoot}
+		if options.Engine != state.EngineSingBox {
+			return usage("unsupported managed engine %q", options.Engine)
+		}
+		fs := newFlagSet("engine install", streams.Err)
+		fs.StringVar(&options.File, "file", "", "local sing-box arm64-musl tar.gz archive")
+		fs.StringVar(&options.SHA256, "sha256", "", "expected archive SHA-256; defaults to FILE.sha256")
+		fs.StringVar(&options.Root, "root", state.DefaultRoot, "boxctl data root")
+		if err := parse(fs, args[3:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(options.File) == "" {
+			return usage("engine install sing-box requires --file PATH")
+		}
+		engineActions, ok := actions.(EngineInstallActions)
+		if !ok {
+			return errors.New("sing-box engine installation is not wired by the application")
+		}
+		return engineActions.InstallEngine(ctx, options)
 	case "doctor":
 		fs := newFlagSet("doctor", streams.Err)
 		options := DoctorOptions{}
@@ -293,7 +363,8 @@ Usage:
 	  boxctl hotplug tun --interface NAME
   boxctl cleanup
   boxctl setpass
-  boxctl config validate [--file PATH]
+  boxctl config validate [--engine mihomo|sing-box] [--file PATH]
+  boxctl engine install sing-box --file PATH [--sha256 HEX] [--root PATH]
   boxctl doctor [--json] [--root PATH]
   boxctl self-update check [--repo OWNER/REPO] [--root PATH]
   boxctl self-update install [--repo OWNER/REPO] [--file PATH] [--sha256 HEX] [--no-restart|--full-restart] [--root PATH]

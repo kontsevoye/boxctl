@@ -9,7 +9,7 @@ dns:
   fake-ip-range: 198.18.0.0/15
   fake-ip-filter-mode: whitelist
   nameserver:
-    - 192.0.2.53
+    - udp://192.168.112.15:5353
 proxies: []
 proxy-groups: []
 rules:

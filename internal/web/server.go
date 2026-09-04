@@ -306,6 +306,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("/api/v1/auth/session", s.handleSession)
 	s.mux.HandleFunc("/api/v1/status", s.handleStatus)
+	s.mux.HandleFunc("/api/v1/engines", s.handleEngines)
+	s.mux.HandleFunc("/api/v1/engines/", s.handleEngineRoute)
 	s.mux.HandleFunc("/api/v1/settings", s.handleSettings)
 	s.mux.HandleFunc("/api/v1/config", s.handleConfig)
 	s.mux.HandleFunc("/api/v1/config/validate", s.handleConfigValidation)
@@ -484,9 +486,10 @@ func serializeUnsafeRequest(r *http.Request) bool {
 	if !isUnsafeMethod(r.Method) {
 		return false
 	}
-	// Login has its own bounded limiter and no authenticated state transaction.
-	// Backup bodies are read and bounded before taking the gate in the handler,
-	// so a slow upload cannot block service stop/restart.
+	// Login and backup read and bound their request bodies before taking the
+	// gate inside their handlers. This keeps slow unauthenticated uploads from
+	// blocking mutations while still serializing credential verification with
+	// a provisional backup state.
 	return r.URL.Path != "/api/v1/auth/login" && r.URL.Path != "/api/v1/backups/import"
 }
 
@@ -729,6 +732,15 @@ func (s *Server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) boo
 		return false
 	}
 	return true
+}
+
+// decodeOptionalJSON preserves the historical empty-body behavior of action
+// endpoints while allowing newer clients to send explicit confirmation data.
+func (s *Server) decodeOptionalJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if r.Body == nil || r.ContentLength == 0 {
+		return true
+	}
+	return s.decodeJSON(w, r, dst)
 }
 
 func parseLogQuery(r *http.Request) LogQuery {

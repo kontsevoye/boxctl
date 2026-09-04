@@ -24,6 +24,8 @@ export function StatusPage() {
 
 function StatusContent({ status }: { status: StatusSnapshot }) {
   const { t } = useI18n()
+  const engine = status.runningEngine ?? status.core.name
+  const selected = status.selectedEngine ?? status.activeProfile?.engine ?? status.core.name
   return <div className="page-stack">
     <section className="metrics-grid">
       <SpotlightCard className="du-card metric-card emphasized metric-health">
@@ -32,11 +34,12 @@ function StatusContent({ status }: { status: StatusSnapshot }) {
         <span className="metric-label">{status.healthy ? t('healthy') : t('unhealthy')}</span>
         <strong>{status.core.state || '—'}</strong>
       </SpotlightCard>
-      <SpotlightCard className="du-card metric-card metric-profile"><span className="metric-label">{t('activeProfile')}</span><strong>{status.activeProfile?.name ?? '—'}</strong></SpotlightCard>
+      <SpotlightCard className="du-card metric-card metric-profile"><span className="metric-label">{t('activeProfile')}</span><strong>{status.activeProfile?.name ?? '—'}</strong><small>{status.activeProfile?.engine ?? status.selectedEngine ?? '—'}</small></SpotlightCard>
+      <SpotlightCard className="du-card metric-card"><span className="metric-label">{t('selectedEngine')}</span><strong>{selected || '—'}</strong><small>{t('runningEngine')}: {engine || '—'}</small></SpotlightCard>
       <SpotlightCard className="du-card metric-card"><span className="metric-label">{t('boxctlUptime')}</span><strong>{formatDuration(status.boxctlUptimeSeconds)}</strong></SpotlightCard>
       <SpotlightCard className="du-card metric-card"><span className="metric-label">{t('coreUptime')}</span><strong>{formatDuration(status.coreUptimeSeconds)}</strong></SpotlightCard>
       <ProcessCard label={t('managerResources')} stats={status.resources?.manager} />
-      <ProcessCard label={t('coreResources')} stats={status.resources?.core} />
+      <ProcessCard label={`${t('coreResources')} · ${engine}`} stats={status.resources?.core} />
     </section>
     {status.traffic && <SpotlightCard className="du-card panel">
       <h2>{t('traffic')}</h2>
@@ -47,6 +50,7 @@ function StatusContent({ status }: { status: StatusSnapshot }) {
       </div>
     </SpotlightCard>}
     {status.core.lastError && <div className="du-alert du-alert-error">{status.core.lastError}</div>}
+    {(status.restartRequired || (status.pendingChanges?.length ?? 0) > 0) && <div className="du-alert du-alert-warning" role="status"><div><strong>{t('pendingRestart')}</strong>{status.pendingChanges && status.pendingChanges.length > 0 && <ul>{status.pendingChanges.map((change, index) => <li key={`${index}:${change}`}>{change}</li>)}</ul>}</div></div>}
     {status.warnings && status.warnings.length > 0 && <SpotlightCard className="du-card panel">
       <h2>{t('warnings')}</h2>
       <div className="notice-list">{status.warnings.map((warning) => <div className="notice" key={warning.code}><Badge tone="warning">{warning.level ?? warning.code}</Badge><span>{warning.message}</span></div>)}</div>

@@ -5,12 +5,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	configpkg "github.com/kontsevoye/boxctl/internal/config"
@@ -21,6 +25,14 @@ import (
 
 type ConfigService struct {
 	Preparer *ActiveMihomoPreparer
+	// EnginePreparer and Lifecycle enable profile-addressed validation and a
+	// rollback-capable restart for every installed engine. Preparer remains for
+	// the legacy config.yaml API and Mihomo-native validation.
+	EnginePreparer *EnginePreparer
+	Lifecycle      *Lifecycle
+	Revisions      *ProfileRevisionStore
+	ValidateEngine func(context.Context, string, []byte) error
+	MutationMu     *sync.Mutex
 	// OnChanged restarts a running lifecycle after a validated config change.
 	// OnReload asks the core to use its native reload endpoint. Their bool
 	// reports whether the new config became live; stopped services return false
@@ -35,9 +47,14 @@ const (
 	configApplyRestart = "restart"
 )
 
-func (service *ConfigService) RawConfig(_ context.Context) (web.RawConfigDocument, error) {
+func (service *ConfigService) RawConfig(ctx context.Context) (web.RawConfigDocument, error) {
 	if service == nil || service.Preparer == nil {
 		return web.RawConfigDocument{}, errors.New("config service is not initialized")
+	}
+	if active, err := service.Preparer.Profiles.Current(); err == nil {
+		return service.ProfileConfig(ctx, profileID(active))
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return web.RawConfigDocument{}, err
 	}
 	content, err := readBoundedRegular(service.Preparer.Layout.MihomoConfig, 32<<20)
 	if err != nil {
@@ -55,6 +72,13 @@ func (service *ConfigService) RawConfig(_ context.Context) (web.RawConfigDocumen
 }
 
 func (service *ConfigService) ValidateRawConfig(ctx context.Context, update web.RawConfigUpdate) (web.ConfigValidation, error) {
+	if service != nil && service.Preparer != nil {
+		if active, err := service.Preparer.Profiles.Current(); err == nil {
+			return service.ValidateProfileConfig(ctx, profileID(active), update)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return web.ConfigValidation{}, err
+		}
+	}
 	if err := validateRawDocument(update.Content); err != nil {
 		// Validation failures are returned as API data, not transport errors.
 		//nolint:nilerr
@@ -69,6 +93,13 @@ func (service *ConfigService) ValidateRawConfig(ctx context.Context, update web.
 }
 
 func (service *ConfigService) SaveRawConfig(ctx context.Context, update web.RawConfigUpdate) (web.ConfigSaveResult, error) {
+	if service != nil && service.Preparer != nil {
+		if active, currentErr := service.Preparer.Profiles.Current(); currentErr == nil {
+			return service.SaveProfileConfig(ctx, profileID(active), update)
+		} else if !errors.Is(currentErr, fs.ErrNotExist) {
+			return web.ConfigSaveResult{}, currentErr
+		}
+	}
 	apply, err := normalizeConfigApply(update.Apply)
 	if err != nil {
 		return web.ConfigSaveResult{}, err
@@ -136,6 +167,256 @@ func (service *ConfigService) SaveRawConfig(ctx context.Context, update web.RawC
 		result.UpdatedAt = info.ModTime().UTC()
 	}
 	return result, nil
+}
+
+func (service *ConfigService) ProfileConfig(_ context.Context, id string) (web.RawConfigDocument, error) {
+	entry, err := service.profileEntry(id)
+	if err != nil {
+		return web.RawConfigDocument{}, err
+	}
+	content, err := service.Preparer.Profiles.Get(entry.ActiveProfile)
+	if err != nil {
+		return web.RawConfigDocument{}, err
+	}
+	if len(content) > 32<<20 {
+		return web.RawConfigDocument{}, errors.New("profile configuration exceeds the editor size limit")
+	}
+	active, activeErr := service.Preparer.Profiles.Current()
+	if activeErr != nil && !errors.Is(activeErr, fs.ErrNotExist) {
+		return web.RawConfigDocument{}, activeErr
+	}
+	result := web.RawConfigDocument{
+		Format: formatForEngine(entry.Engine), Content: string(content), Revision: contentRevision(content),
+		Profile: &web.ProfileRef{ID: id, Name: entry.Name, Engine: entry.Engine},
+		Engine:  entry.Engine, Active: activeErr == nil && active == entry.ActiveProfile,
+	}
+	if info, statErr := os.Stat(entry.Path); statErr == nil {
+		result.UpdatedAt = info.ModTime().UTC()
+	}
+	if service.Revisions != nil {
+		revision, pending, revisionErr := service.Revisions.Pending(entry.ActiveProfile)
+		if revisionErr != nil {
+			return web.RawConfigDocument{}, revisionErr
+		}
+		result.AppliedRevision = revision.AppliedRevision
+		result.Pending = result.Active && pending
+	}
+	return result, nil
+}
+
+func (service *ConfigService) ValidateProfileConfig(ctx context.Context, id string, update web.RawConfigUpdate) (web.ConfigValidation, error) {
+	entry, err := service.profileEntry(id)
+	if err != nil {
+		return web.ConfigValidation{}, err
+	}
+	if err := validateRawDocument(update.Content); err != nil {
+		//nolint:nilerr // syntax rejection is represented as validation data
+		return invalidConfigValidation(entry.Engine), nil
+	}
+	if err := service.validateEngineContent(ctx, entry.Engine, []byte(update.Content)); err != nil {
+		//nolint:nilerr // native-engine rejection is represented as validation data
+		return invalidConfigValidation(entry.Engine), nil
+	}
+	return web.ConfigValidation{Valid: true}, nil
+}
+
+func (service *ConfigService) SaveProfileConfig(ctx context.Context, id string, update web.RawConfigUpdate) (web.ConfigSaveResult, error) {
+	if service != nil && service.MutationMu != nil {
+		service.MutationMu.Lock()
+		defer service.MutationMu.Unlock()
+	}
+	apply, err := normalizeConfigApply(update.Apply)
+	if err != nil {
+		return web.ConfigSaveResult{}, err
+	}
+	entry, err := service.profileEntry(id)
+	if err != nil {
+		return web.ConfigSaveResult{}, err
+	}
+	if apply == configApplyReload && entry.Engine != state.EngineMihomo {
+		return web.ConfigSaveResult{}, &web.PublicError{
+			Status: http.StatusConflict, Code: "reload_unsupported",
+			Message: "Native reload is not supported for this engine; save or restart instead",
+		}
+	}
+	if err := validateRawDocument(update.Content); err != nil {
+		return web.ConfigSaveResult{}, &web.PublicError{Status: http.StatusBadRequest, Code: "invalid_config", Message: "Configuration must be non-empty UTF-8 within the size limit"}
+	}
+	current, err := service.Preparer.Profiles.Get(entry.ActiveProfile)
+	if err != nil {
+		return web.ConfigSaveResult{}, err
+	}
+	if update.Revision == "" {
+		return web.ConfigSaveResult{}, &web.PublicError{Status: http.StatusPreconditionRequired, Code: "revision_required", Message: "Configuration revision is required"}
+	}
+	if update.Revision != contentRevision(current) {
+		return web.ConfigSaveResult{}, &web.PublicError{Status: http.StatusConflict, Code: "revision_conflict", Message: "Configuration changed since it was loaded"}
+	}
+	content := []byte(strings.TrimRight(update.Content, "\r\n") + "\n")
+	if err := service.validateEngineContent(ctx, entry.Engine, content); err != nil {
+		return web.ConfigSaveResult{}, &web.PublicError{Status: http.StatusBadRequest, Code: "invalid_config", Message: engineValidationMessage(entry.Engine)}
+	}
+
+	active, activeErr := service.Preparer.Profiles.Current()
+	if activeErr != nil && !errors.Is(activeErr, fs.ErrNotExist) {
+		return web.ConfigSaveResult{}, activeErr
+	}
+	isActive := activeErr == nil && active == entry.ActiveProfile
+	isRunning := isActive && service.Lifecycle != nil && service.Lifecycle.Snapshot().State == LifecycleRunning
+	newRevision := contentRevision(content)
+	oldRevision := contentRevision(current)
+	var oldRevisionRecord profileRevision
+	oldRevisionExisted := false
+	if isActive && service.Revisions != nil {
+		oldRevisionRecord, oldRevisionExisted, err = service.Revisions.Snapshot(entry.ActiveProfile)
+		if err != nil {
+			return web.ConfigSaveResult{}, fmt.Errorf("snapshot profile revision state: %w", err)
+		}
+	}
+
+	if err := service.Preparer.Profiles.Update(ctx, entry.ActiveProfile, content); err != nil {
+		return web.ConfigSaveResult{}, err
+	}
+	if isActive {
+		if err := service.Preparer.Profiles.Activate(ctx, entry.ActiveProfile); err != nil {
+			restoreErr := service.Preparer.Profiles.Update(context.Background(), entry.ActiveProfile, current)
+			if restoreErr == nil {
+				restoreErr = service.Preparer.Profiles.Activate(context.Background(), entry.ActiveProfile)
+			}
+			return web.ConfigSaveResult{}, errors.Join(err, restoreErr)
+		}
+		if service.Revisions != nil {
+			if err := service.Revisions.MarkPending(ctx, entry.ActiveProfile, oldRevision); err != nil {
+				rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				defer cancel()
+				restoreSourceErr := service.Preparer.Profiles.Update(rollbackContext, entry.ActiveProfile, current)
+				var restoreMirrorErr error
+				if restoreSourceErr == nil {
+					restoreMirrorErr = service.Preparer.Profiles.Activate(rollbackContext, entry.ActiveProfile)
+				}
+				restoreRevisionErr := service.Revisions.Restore(rollbackContext, entry.ActiveProfile, oldRevisionRecord, oldRevisionExisted)
+				return web.ConfigSaveResult{}, errors.Join(
+					fmt.Errorf("record pending configuration revision: %w", err),
+					restoreSourceErr, restoreMirrorErr, restoreRevisionErr,
+				)
+			}
+		}
+	}
+
+	applied := false
+	switch {
+	case !isActive || apply == configApplySave:
+		// Inactive documents and save-only writes intentionally do not touch the
+		// live process. A selected running profile remains visibly pending.
+	case isRunning && apply == configApplyRestart && service.EnginePreparer != nil:
+		target, prepareErr := service.EnginePreparer.PrepareProfile(ctx, entry.ActiveProfile)
+		if prepareErr != nil {
+			return web.ConfigSaveResult{}, fmt.Errorf("configuration was saved but target preparation failed: %w", prepareErr)
+		}
+		if target.SourceRevision != newRevision {
+			engine.CleanupPreparedRuntime(target)
+			return web.ConfigSaveResult{}, errors.New("configuration changed while the restart candidate was being prepared")
+		}
+		commit := func() error {
+			latest, latestErr := service.Preparer.Profiles.Get(entry.ActiveProfile)
+			if latestErr != nil {
+				return latestErr
+			}
+			if contentRevision(latest) != target.SourceRevision {
+				return errors.New("configuration changed before the prepared runtime could be committed")
+			}
+			if service.Revisions == nil {
+				return nil
+			}
+			return service.Revisions.MarkAppliedRevision(context.WithoutCancel(ctx), entry.ActiveProfile, target.SourceRevision)
+		}
+		applied, err = service.Lifecycle.ReconfigurePrepared(ctx, target, commit)
+		if err != nil {
+			return web.ConfigSaveResult{}, fmt.Errorf("configuration was saved but restart failed: %w", err)
+		}
+	case apply == configApplyReload && service.OnReload != nil:
+		applied, err = service.OnReload(ctx)
+	case apply == configApplyRestart && service.OnChanged != nil:
+		applied, err = service.OnChanged(ctx)
+	}
+	if err != nil {
+		return web.ConfigSaveResult{}, fmt.Errorf("configuration was saved but %s failed: %w", apply, err)
+	}
+	if applied && service.Revisions != nil {
+		if err := service.Revisions.MarkAppliedRevision(context.WithoutCancel(ctx), entry.ActiveProfile, newRevision); err != nil {
+			return web.ConfigSaveResult{}, fmt.Errorf("configuration is live but applied revision could not be recorded: %w", err)
+		}
+	}
+	info, _ := os.Stat(entry.Path)
+	result := web.ConfigSaveResult{
+		Revision: newRevision, ReloadRequired: isActive && !applied,
+		Applied: applied, Apply: apply,
+	}
+	if info != nil {
+		result.UpdatedAt = info.ModTime().UTC()
+	}
+	return result, nil
+}
+
+func (service *ConfigService) profileEntry(id string) (state.ProfileEntry, error) {
+	if service == nil || service.Preparer == nil {
+		return state.ProfileEntry{}, errors.New("config service is not initialized")
+	}
+	profile, err := parseProfileID(id)
+	if err != nil {
+		return state.ProfileEntry{}, web.ErrNotFound
+	}
+	entries, err := service.Preparer.Profiles.List()
+	if err != nil {
+		return state.ProfileEntry{}, err
+	}
+	for _, entry := range entries {
+		if entry.ActiveProfile == profile {
+			return entry, nil
+		}
+	}
+	return state.ProfileEntry{}, web.ErrNotFound
+}
+
+func (service *ConfigService) validateEngineContent(ctx context.Context, engineName string, content []byte) error {
+	if service.ValidateEngine != nil {
+		return service.ValidateEngine(ctx, engineName, content)
+	}
+	if engineName == state.EngineMihomo {
+		return service.ValidateMihomoContent(ctx, content)
+	}
+	if engineName != state.EngineSingBox {
+		return errors.New("unsupported profile engine")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.UseNumber()
+	var document map[string]any
+	if err := decoder.Decode(&document); err != nil || document == nil {
+		return errors.New("sing-box profile is not a JSON object")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("sing-box profile contains trailing JSON")
+	}
+	return nil
+}
+
+func invalidConfigValidation(engineName string) web.ConfigValidation {
+	return web.ConfigValidation{Valid: false, Diagnostics: []web.ConfigDiagnostic{{Severity: "error", Message: engineValidationMessage(engineName)}}}
+}
+
+func engineValidationMessage(engineName string) string {
+	if engineName == state.EngineSingBox {
+		return "sing-box rejected the native JSON configuration"
+	}
+	return "Mihomo rejected the native YAML configuration"
+}
+
+func formatForEngine(engineName string) string {
+	if engineName == state.EngineSingBox {
+		return "json"
+	}
+	return "yaml"
 }
 
 func normalizeConfigApply(value string) (string, error) {

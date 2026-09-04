@@ -97,14 +97,53 @@ type StatusSnapshot struct {
 	CoreUptimeSeconds   int64          `json:"coreUptimeSeconds,omitempty"`
 	Core                CoreHealth     `json:"core"`
 	ActiveProfile       *ProfileRef    `json:"activeProfile,omitempty"`
+	SelectedEngine      string         `json:"selectedEngine,omitempty"`
+	RunningEngine       string         `json:"runningEngine,omitempty"`
+	RuntimeEpoch        uint64         `json:"runtimeEpoch,omitempty"`
+	RestartRequired     bool           `json:"restartRequired,omitempty"`
+	PendingChanges      []string       `json:"pendingChanges,omitempty"`
+	Transition          string         `json:"transition,omitempty"`
 	Traffic             *TrafficStats  `json:"traffic,omitempty"`
 	Resources           *ResourceStats `json:"resources,omitempty"`
 	Warnings            []Notice       `json:"warnings,omitempty"`
 }
 
 type ProfileRef struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Engine string `json:"engine"`
+}
+
+// EngineInfo describes one selectable native core without exposing local
+// paths, controller credentials, or release URLs. Runtime capabilities remain
+// available from /core/capabilities; Management describes boxctl-owned
+// resources which can also be edited while this engine is not running.
+type EngineInfo struct {
+	ID                    string                       `json:"id"`
+	DisplayName           string                       `json:"displayName"`
+	ConfigFormat          string                       `json:"configFormat"`
+	Extensions            []string                     `json:"extensions"`
+	Installed             bool                         `json:"installed"`
+	InstallSource         string                       `json:"installSource,omitempty"`
+	Version               string                       `json:"version,omitempty"`
+	Compatible            bool                         `json:"compatible"`
+	Selected              bool                         `json:"selected"`
+	Running               bool                         `json:"running"`
+	SupportedCaptureModes []string                     `json:"supportedCaptureModes"`
+	Management            EngineManagementCapabilities `json:"management"`
+}
+
+type EngineManagementCapabilities struct {
+	RemoteProfiles     bool `json:"remoteProfiles"`
+	ProxySubscriptions bool `json:"proxySubscriptions"`
+	LocalRuleLists     bool `json:"localRuleLists"`
+	FakeIPCapture      bool `json:"fakeIPCapture"`
+	Updates            bool `json:"updates"`
+	ExternalDashboard  bool `json:"externalDashboard"`
+}
+
+type EngineService interface {
+	Engines(ctx context.Context) ([]EngineInfo, error)
 }
 
 type TrafficStats struct {
@@ -153,6 +192,8 @@ type Settings struct {
 	IncludedInterfaces                   []string          `json:"includedInterfaces,omitempty"`
 	ExcludedInterfaces                   []string          `json:"excludedInterfaces,omitempty"`
 	TUNStack                             string            `json:"tunStack,omitempty"`
+	TUNAddress                           string            `json:"tunAddress,omitempty"`
+	TUNMTU                               uint32            `json:"tunMTU,omitempty"`
 	RejectQUIC                           bool              `json:"rejectQUIC,omitempty"`
 	ReservedNetworks                     []string          `json:"reservedNetworks,omitempty"`
 	BypassSources                        []string          `json:"bypassSources,omitempty"`
@@ -199,6 +240,8 @@ type SettingsPatch struct {
 	IncludedInterfaces                   *[]string `json:"includedInterfaces,omitempty"`
 	ExcludedInterfaces                   *[]string `json:"excludedInterfaces,omitempty"`
 	TUNStack                             *string   `json:"tunStack,omitempty"`
+	TUNAddress                           *string   `json:"tunAddress,omitempty"`
+	TUNMTU                               *uint32   `json:"tunMTU,omitempty"`
 	RejectQUIC                           *bool     `json:"rejectQUIC,omitempty"`
 	ReservedNetworks                     *[]string `json:"reservedNetworks,omitempty"`
 	BypassSources                        *[]string `json:"bypassSources,omitempty"`
@@ -224,10 +267,15 @@ type SettingsService interface {
 // contain credentials: handlers set no-store, never log it, and never include it
 // in mutation responses or error details.
 type RawConfigDocument struct {
-	Format    string    `json:"format"`
-	Content   string    `json:"content"`
-	Revision  string    `json:"revision"`
-	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+	Format          string      `json:"format"`
+	Content         string      `json:"content"`
+	Revision        string      `json:"revision"`
+	UpdatedAt       time.Time   `json:"updatedAt,omitempty"`
+	Profile         *ProfileRef `json:"profile,omitempty"`
+	Engine          string      `json:"engine,omitempty"`
+	Active          bool        `json:"active,omitempty"`
+	AppliedRevision string      `json:"appliedRevision,omitempty"`
+	Pending         bool        `json:"pending,omitempty"`
 }
 
 type RawConfigUpdate struct {
@@ -266,6 +314,15 @@ type ConfigService interface {
 	SaveRawConfig(ctx context.Context, update RawConfigUpdate) (ConfigSaveResult, error)
 }
 
+// ProfileConfigService exposes the same secret-safe editor contract for a
+// specific active or inactive profile. The legacy ConfigService remains the
+// active-profile alias for older clients.
+type ProfileConfigService interface {
+	ProfileConfig(ctx context.Context, id string) (RawConfigDocument, error)
+	ValidateProfileConfig(ctx context.Context, id string, update RawConfigUpdate) (ConfigValidation, error)
+	SaveProfileConfig(ctx context.Context, id string, update RawConfigUpdate) (ConfigSaveResult, error)
+}
+
 // Profile is safe to return to a browser. Source credentials and raw generated
 // engine configuration are intentionally absent.
 type Profile struct {
@@ -284,6 +341,10 @@ type Profile struct {
 	NextUpdateAt        time.Time `json:"nextUpdateAt,omitzero"`
 	LastError           string    `json:"lastError,omitempty"`
 	Fingerprint         string    `json:"fingerprint,omitempty"`
+	AppliedRevision     string    `json:"appliedRevision,omitempty"`
+	PendingRevision     string    `json:"pendingRevision,omitempty"`
+	PendingAt           time.Time `json:"pendingAt,omitzero"`
+	RestartRequired     bool      `json:"restartRequired,omitempty"`
 }
 
 // ProfileDraft accepts a source URL on writes, but no API response includes it.
@@ -316,10 +377,22 @@ type ProfileService interface {
 	DetachProfileSource(ctx context.Context, id string) (Profile, error)
 }
 
+type ProfileActivationRequest struct {
+	ConfirmRestart bool `json:"confirmRestart,omitempty"`
+}
+
+// ConfirmedProfileService is optional so embedders implementing the original
+// ProfileService keep working. The production service uses it to reject an
+// implicit disruptive switch while a core is running.
+type ConfirmedProfileService interface {
+	ActivateProfileWithRequest(ctx context.Context, id string, request ProfileActivationRequest) (Profile, error)
+}
+
 // ProxySubscription is a secret-free view of one boxctl-managed Mihomo proxy
 // provider. URLs, share links and header values are write-only.
 type ProxySubscription struct {
 	ID                  string    `json:"id"`
+	Engine              string    `json:"engine"`
 	Name                string    `json:"name"`
 	ProviderName        string    `json:"providerName"`
 	SourceKind          string    `json:"sourceKind"`
@@ -339,6 +412,7 @@ type ProxySubscription struct {
 }
 
 type ProxySubscriptionDraft struct {
+	Engine              string            `json:"engine,omitempty"`
 	Name                string            `json:"name"`
 	SourceURL           string            `json:"sourceUrl,omitempty"`
 	ShareLinks          string            `json:"shareLinks,omitempty"`
@@ -369,6 +443,7 @@ type ProxySubscriptionService interface {
 // optimistic-concurrency token owned by the backing service.
 type RuleList struct {
 	ID              string    `json:"id"`
+	Engine          string    `json:"engine"`
 	Name            string    `json:"name"`
 	Format          string    `json:"format"`
 	Enabled         bool      `json:"enabled"`
@@ -387,6 +462,7 @@ type RuleListDocument struct {
 }
 
 type RuleListDraft struct {
+	Engine  string `json:"engine,omitempty"`
 	Name    string `json:"name"`
 	Format  string `json:"format"`
 	Enabled bool   `json:"enabled"`
@@ -416,6 +492,7 @@ type RuleListService interface {
 // destination pool captured alongside the configured fake-IP ranges. It must
 // not contain raw engine configuration or provider credentials.
 type FakeIPWhitelistDocument struct {
+	Engine          string     `json:"engine,omitempty"`
 	ManualContent   string     `json:"manualContent"`
 	GeneratedCIDRs  []string   `json:"generatedCIDRs"`
 	FakeIPRanges    []string   `json:"fakeIPRanges"`
@@ -481,6 +558,7 @@ type BackupService interface {
 // CoreUpdateStatus contains only release identity and availability. Download
 // URLs, asset digests and local filesystem paths remain server-side.
 type CoreUpdateStatus struct {
+	Engine          string `json:"engine,omitempty"`
 	CurrentVersion  string `json:"currentVersion,omitempty"`
 	LatestVersion   string `json:"latestVersion,omitempty"`
 	Channel         string `json:"channel"`
@@ -488,6 +566,7 @@ type CoreUpdateStatus struct {
 }
 
 type CoreUpdateResult struct {
+	Engine          string `json:"engine,omitempty"`
 	PreviousVersion string `json:"previousVersion,omitempty"`
 	CurrentVersion  string `json:"currentVersion"`
 	Restarted       bool   `json:"restarted"`
@@ -499,6 +578,11 @@ type CoreUpdateResult struct {
 type CoreUpdateService interface {
 	CoreUpdateStatus(ctx context.Context) (CoreUpdateStatus, error)
 	InstallCoreUpdate(ctx context.Context) (CoreUpdateResult, error)
+}
+
+type EngineUpdateService interface {
+	EngineUpdateStatus(ctx context.Context, engine string) (CoreUpdateStatus, error)
+	InstallEngineUpdate(ctx context.Context, engine string) (CoreUpdateResult, error)
 }
 
 // ExternalDashboardStatus describes the optional on-disk Clash dashboard.
@@ -721,6 +805,7 @@ type Services struct {
 	AdminSetup            AdminSetupService
 	SessionSecrets        SessionSecretStore
 	Status                StatusService
+	Engines               EngineService
 	Settings              SettingsService
 	Config                ConfigService
 	Profiles              ProfileService

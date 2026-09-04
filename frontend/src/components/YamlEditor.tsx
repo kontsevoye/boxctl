@@ -9,9 +9,10 @@ interface YamlEditorProps {
   value: string
   onChange: (value: string) => void
   ariaLabel: string
+  format?: 'yaml' | 'json'
 }
 
-export function YamlEditor({ value, onChange, ariaLabel }: YamlEditorProps) {
+export function YamlEditor({ value, onChange, ariaLabel, format = 'yaml' }: YamlEditorProps) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | undefined>(undefined)
   const onChangeRef = useRef(onChange)
@@ -32,7 +33,7 @@ export function YamlEditor({ value, onChange, ariaLabel }: YamlEditorProps) {
         doc: value,
         extensions: [
           basicSetup,
-          yaml(),
+          ...(format === 'yaml' ? [yaml()] : []),
           ...(styleNonce ? [EditorView.cspNonce.of(styleNonce)] : []),
           editorTheme.current.of(activeEditorTheme()),
           EditorView.lineWrapping,
@@ -57,7 +58,7 @@ export function YamlEditor({ value, onChange, ariaLabel }: YamlEditorProps) {
       view.current = undefined
     }
     // The document is synchronized separately so the editor and its selection survive parent renders.
-  }, [])
+  }, [format])
 
   useEffect(() => {
     const editor = view.current

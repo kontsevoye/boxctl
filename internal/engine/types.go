@@ -19,6 +19,10 @@ var (
 	ErrAlreadyRunning = errors.New("engine is already running")
 	// ErrNotRunning is returned when an operation requires a live process.
 	ErrNotRunning = errors.New("engine is not running")
+	// ErrProcessStateNotOwned means the shared persisted process record belongs
+	// to another known engine. Multi-engine adoption probes should continue with
+	// that owner instead of treating the record as corrupt.
+	ErrProcessStateNotOwned = errors.New("process state belongs to another engine")
 )
 
 // Capability is a stable name suitable for logs, APIs and feature gates.
@@ -146,11 +150,17 @@ type DestinationCapture struct {
 // CapturePlan is the complete core-facing contract consumed by a platform
 // firewall planner. It intentionally contains no nftables or iptables syntax.
 type CapturePlan struct {
-	TCP                 ProtocolCapture
-	UDP                 ProtocolCapture
-	DNS                 DNSEndpoint
-	TUNDevice           string
-	TUNStack            string
+	TCP       ProtocolCapture
+	UDP       ProtocolCapture
+	DNS       DNSEndpoint
+	TUNDevice string
+	TUNStack  string
+	// TUNAddresses and TUNMTU are engine-neutral interface parameters. An
+	// empty address list lets a concrete preparer select its documented
+	// compatibility default; callers should normally provide a prefix chosen
+	// after checking LAN and VPN overlap.
+	TUNAddresses        []netip.Prefix
+	TUNMTU              uint32
 	LoopMark            uint32
 	FakeIPRanges        []netip.Prefix
 	Destinations        DestinationCapture
@@ -169,6 +179,11 @@ func (p CapturePlan) Validate() error {
 	}
 	if (p.TCP.Method == CaptureTUN || p.UDP.Method == CaptureTUN) && p.TUNDevice == "" {
 		return errors.New("TUN capture requires a device")
+	}
+	for _, prefix := range p.TUNAddresses {
+		if !prefix.IsValid() {
+			return errors.New("capture plan contains an invalid TUN address")
+		}
 	}
 	if p.DNS.Enabled && p.DNS.Port == 0 {
 		return errors.New("enabled DNS endpoint requires a port")
@@ -234,9 +249,13 @@ type ControllerEndpoint struct {
 // SourceConfigPath always remains user-owned; only RuntimeConfigPath is passed
 // to the process.
 type PreparedCore struct {
-	Engine            string
-	BinaryPath        string
-	SourceConfigPath  string
+	Engine           string
+	BinaryPath       string
+	SourceConfigPath string
+	// SourceRevision is a caller-computed identity of the exact user profile
+	// from which this runtime was prepared. It is persisted for crash recovery
+	// but never interpreted by an engine driver.
+	SourceRevision    string
 	RuntimeConfigPath string
 	HomeDir           string
 	Args              []string

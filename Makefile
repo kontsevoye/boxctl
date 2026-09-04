@@ -23,6 +23,7 @@ POSIX_SHELL_SCRIPTS := \
 	scripts/test-release-notes.sh \
 	scripts/validate-calver.sh \
 	tests/integration/guest/run.sh \
+	tests/integration/guest/singbox-traffic.sh \
 	tests/integration/guest/traffic.sh
 BASH_SHELL_SCRIPTS := \
 	scripts/build-openwrt-apk.sh \
