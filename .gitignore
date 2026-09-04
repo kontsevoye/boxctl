@@ -1,0 +1,17 @@
+/.direnv/
+/.envrc.local
+/bin/
+/dist/
+/frontend/node_modules/
+/frontend/dist/
+/internal/web/static/
+/result
+/result-*
+*.test
+*.out
+*.log
+.DS_Store
+/tests/integration/.cache/
+/tests/integration/.private/
+/tests/integration/out/
+/.cache/openwrt-sdk/

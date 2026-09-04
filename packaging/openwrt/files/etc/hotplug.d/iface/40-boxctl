@@ -1,0 +1,13 @@
+#!/bin/sh
+
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" != "loopback" ] || exit 0
+BOXCTL_ROOT=/opt/boxctl
+BOXCTL_BIN="${BOXCTL_ROOT}/bin/boxctl"
+
+[ -x "$BOXCTL_BIN" ] || exit 0
+/etc/init.d/boxctl running >/dev/null 2>&1 || exit 0
+
+# The manager re-runs its read-only LAN/WAN detector and reconciles only owned
+# rules, so this is safe for custom logical WAN names as well as `wan`/`wan6`.
+BOXCTL_ROOT="$BOXCTL_ROOT" "$BOXCTL_BIN" hotplug wan >/dev/null 2>&1

@@ -1,0 +1,138 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - nilerr
+    - staticcheck
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling
+    rules:
+      # Test fixtures deliberately exercise executable files, credentials,
+      # redirects and generated shell snippets without handling untrusted input.
+      - path: _test\.go
+        linters:
+          - gosec
+      # Backup paths are rooted, normalized and checked against traversal before
+      # use. The archive argument itself is a local file selected by the caller.
+      - path: internal/backup/backup\.go
+        text: "G304:"
+        linters:
+          - gosec
+      # The Mihomo source is a caller-selected regular config, and rule-list
+      # paths are normalized and confined to the store root before access.
+      - path: internal/(config/mihomo|rulelist/store)\.go
+        text: "G304:"
+        linters:
+          - gosec
+      # State-store names are cleaned and root-confined; reads additionally
+      # reject symlinks/non-regular files and inspect every parent component.
+      - path: internal/state/(store|profiles)\.go
+        text: "G304:"
+        linters:
+          - gosec
+      # These paths come from CreateTemp/manager-owned layout entries and are
+      # bounded regular files before being read.
+      - path: internal/app/(maintenance_services|mihomo_prepare)\.go
+        text: "G304:"
+        linters:
+          - gosec
+      - path: internal/update/install\.go
+        text: "G304:"
+        linters:
+          - gosec
+      # These commands execute validated core binaries or fixed OpenWrt command
+      # plans; arguments are not passed through a shell.
+      - path: internal/(engine/mihomo|platform/openwrt/runner)\.go
+        text: "G204:"
+        linters:
+          - gosec
+      # Executable mode is the intended result for the verified core artifact.
+      - path: internal/update/install\.go
+        text: "G302:"
+        linters:
+          - gosec
+      # These are password-record format labels, not credentials.
+      - path: internal/(state/password|app/credentials|web/auth)\.go
+        text: "G101:"
+        linters:
+          - gosec
+      # Plain HTTP is an explicit LAN deployment option; the cookie still sets
+      # HttpOnly and Strict SameSite, and Secure follows that deployment choice.
+      - path: internal/web/server\.go
+        text: "G124:"
+        linters:
+          - gosec
+      # Re-exec uses the already running executable after resolving it to an
+      # absolute, executable, non-symlink regular file; argv bypasses a shell.
+      - path: cmd/boxctl/main\.go
+        text: "G(204|702|703):"
+        linters:
+          - gosec
+      # Production callers pass a fixed allowlist of small OS identity files;
+      # the variable path exists solely for unit-testable bounded reads.
+      - path: internal/app/device_identity\.go
+        text: "G304:"
+        linters:
+          - gosec
+      # This is a private state filename, not a credential literal.
+      - path: internal/app/endpoint_bypass\.go
+        text: "G101:"
+        linters:
+          - gosec
+      # Dashboard staging directories are private (0700), while extracted web
+      # assets intentionally need conventional 0755 directory traversal.
+      - path: internal/app/external_dashboard\.go
+        text: "G30[12]:"
+        linters:
+          - gosec
+      # Dashboard metadata/assets are resolved below a manager-owned root;
+      # extraction rejects absolute, traversal, duplicate and symlink paths.
+      - path: internal/app/external_dashboard\.go
+        text: "G304:"
+        linters:
+          - gosec
+      # The walk operates only on a fresh 0700 staging tree populated by this
+      # process; archive symlinks are rejected before the durability sync.
+      - path: internal/app/external_dashboard\.go
+        text: "G122:"
+        linters:
+          - gosec
+      # These chmod calls tighten manager-owned runtime directories to 0700.
+      - path: internal/app/mihomo_prepare\.go
+        text: "G302:"
+        linters:
+          - gosec
+      # MD5 reproduces Mihomo's cache filename contract and is never used for
+      # authentication, integrity, or any other security decision.
+      - path: internal/(app/mihomo_provider_cache|config/provider_runtime)\.go
+        text: "G501:"
+        linters:
+          - gosec
+      # The length equality short-circuits before the second argument access.
+      - path: internal/cli/cli\.go
+        text: "G602:"
+        linters:
+          - gosec
+      # Fake-IP store paths are normalized, root-confined and checked for
+      # symlinks before these reads.
+      - path: internal/fakeip/store\.go
+        text: "G304:"
+        linters:
+          - gosec
+      # Darwin intentionally provides always-error stubs for the Linux-only
+      # persistent process handoff. Runtime callers gate these paths on Linux.
+      - path: internal/engine/mihomo\.go
+        text: "SA4023"
+        linters:
+          - staticcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

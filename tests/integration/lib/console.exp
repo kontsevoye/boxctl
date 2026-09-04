@@ -1,0 +1,92 @@
+#!/usr/bin/expect -f
+
+if {$argc != 3} {
+	puts stderr "usage: console.exp SERIAL_SOCKET QMP_SOCKET TIMEOUT_SECONDS"
+	exit 2
+}
+set serial_socket [lindex $argv 0]
+set qmp_socket [lindex $argv 1]
+set timeout [lindex $argv 2]
+set helper [file join [file dirname [file normalize [info script]]] qmp-link-down.py]
+log_user 1
+set send_slow {1 .05}
+spawn -noecho sh -c {stty raw -echo || exit 1; exec nc -U "$1"} integration-nc $serial_socket
+set prompt {root@[^:\r\n]+:[^\r\n]*# ?$}
+
+while {1} {
+	expect {
+		-re {Please press Enter to activate this console\.} { send -- "\r" }
+		-re $prompt { break }
+		timeout { puts stderr "timed out waiting for OpenWrt"; exit 1 }
+		eof { puts stderr "console closed during boot"; exit 1 }
+	}
+}
+
+set integration_timeout $timeout
+set ready 0
+for {set attempt 1} {$attempt <= 3} {incr attempt} {
+	after 1000
+	send -- "echo INTEGRATION-READY-${attempt}\r"
+	set timeout 5
+	expect {
+		-re "INTEGRATION-READY-${attempt}\\r*\\n" { set ready 1; break }
+		timeout {}
+		eof { puts stderr "console closed during readiness handshake"; exit 1 }
+	}
+}
+if {!$ready} {
+	puts stderr "OpenWrt console did not accept commands"
+	exit 1
+}
+set timeout 10
+expect {
+	-re $prompt {}
+	timeout { puts stderr "OpenWrt prompt did not return after readiness handshake"; exit 1 }
+	eof { puts stderr "console closed after readiness handshake"; exit 1 }
+}
+set timeout $integration_timeout
+
+proc run_step {command prompt} {
+	global timeout
+	send -s -- $command
+	after 20
+	send -- "\r"
+	expect {
+		-re {INTEGRATION-STEP:([0-9]+)} { set status $expect_out(1,string) }
+		timeout { return 1 }
+		eof { return 1 }
+	}
+	if {$status != 0} { return $status }
+	expect {
+		-re $prompt { return 0 }
+		timeout { return 1 }
+		eof { return 1 }
+	}
+}
+
+foreach command [list \
+	"mkdir -p /mnt/integration-input /mnt/integration-output" \
+	"mount -t 9p -o trans=virtio,version=9p2000.L,ro integration_input /mnt/integration-input" \
+	"mount -t 9p -o trans=virtio,version=9p2000.L integration_output /mnt/integration-output"] {
+	if {[run_step "$command; echo INTEGRATION-STEP:\$?" $prompt] != 0} {
+		send -- "poweroff -f\r"
+		exit 1
+	}
+}
+
+send -s -- "/mnt/integration-input/guest/run.sh /mnt/integration-output; echo INTEGRATION-DONE:\$?"
+after 20
+send -- "\r"
+set result 1
+expect {
+	-re {INTEGRATION-ISOLATE-REQUEST\r*\n} {
+		set failed [catch {exec python3 $helper $qmp_socket prep-nic} output]
+		if {$failed} { send -- "INTEGRATION-ISOLATE-FAILED\r" } else { send -- "INTEGRATION-ISOLATED\r" }
+		exp_continue
+	}
+	-re {INTEGRATION-DONE:([0-9]+)} { set result $expect_out(1,string) }
+	timeout { puts stderr "integration timed out"; set result 1 }
+	eof { puts stderr "console closed before completion"; set result 1 }
+}
+send -- "poweroff -f\r"
+exit $result

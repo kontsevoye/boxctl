@@ -1,0 +1,59 @@
+.file-picker-field {
+  display: grid;
+  gap: .4rem;
+  width: 100%;
+}
+
+.file-picker-label {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 650;
+}
+
+.file-picker {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  width: 100%;
+  min-height: 3.35rem;
+  border: 1px dashed var(--border);
+  border-radius: .8rem;
+  background: var(--panel-raised);
+  padding: .5rem;
+  transition: border-color .15s, background .15s;
+}
+
+.file-picker:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--panel-raised) 92%, var(--accent-soft));
+}
+
+.file-picker-trigger {
+  flex: 0 0 auto;
+  gap: .45rem;
+}
+
+.file-picker-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-picker-name.selected {
+  color: var(--text);
+}
+
+@media (width <= 560px) {
+  .file-picker {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .file-picker-name {
+    padding: .15rem .35rem;
+  }
+}

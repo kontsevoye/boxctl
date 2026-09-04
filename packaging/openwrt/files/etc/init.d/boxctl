@@ -1,0 +1,82 @@
+#!/bin/sh /etc/rc.common
+
+# shellcheck disable=SC2034 # consumed by OpenWrt rc.common
+START=21
+STOP=79
+USE_PROCD=1
+EXTRA_COMMANDS="manager_handoff"
+EXTRA_HELP="\tmanager_handoff\tRe-exec only the boxctl manager for a compatible self-update"
+
+BOXCTL_ROOT="/opt/boxctl"
+BOXCTL_BIN="${BOXCTL_ROOT}/bin/boxctl"
+START_STOPPED_MARKER="${BOXCTL_ROOT}/.install/start-stopped-until-first-success"
+HANDOFF_MARKER="${BOXCTL_ROOT}/.boxctl/manager-handoff.json"
+
+start_service() {
+	[ -x "$BOXCTL_BIN" ] || {
+		logger -t boxctl "manager is not executable: $BOXCTL_BIN"
+		return 1
+	}
+	allowed_hosts=
+	public_origin=
+	enable_external_dashboard=0
+	tls_certificate=
+	tls_key=
+	config_load boxctl
+	config_get allowed_hosts main allowed_hosts ''
+	config_get public_origin main public_origin ''
+	config_get_bool enable_external_dashboard main enable_unsafe_external_dashboard 0
+	config_get tls_certificate main tls_certificate ''
+	config_get tls_key main tls_key ''
+	if { [ -n "$tls_certificate" ] && [ -z "$tls_key" ]; } || { [ -z "$tls_certificate" ] && [ -n "$tls_key" ]; }; then
+		logger -t boxctl 'both tls_certificate and tls_key must be configured'
+		return 1
+	fi
+
+	procd_open_instance
+	if [ -f "$START_STOPPED_MARKER" ]; then
+		# The command is retained by procd for every respawn of this instance. The
+		# Go lifecycle removes the marker only after the first successful core
+		# Start, so a failed cutover cannot silently retry with automatic startup.
+		procd_set_param command "$BOXCTL_BIN" serve --root "$BOXCTL_ROOT" --start-stopped
+	else
+		procd_set_param command "$BOXCTL_BIN" serve --root "$BOXCTL_ROOT"
+	fi
+	procd_set_param env HOME="$BOXCTL_ROOT" TMPDIR="/tmp" BOXCTL_ROOT="$BOXCTL_ROOT"
+	[ -z "$allowed_hosts" ] || procd_append_param env BOXCTL_ALLOWED_HOSTS="$allowed_hosts"
+	[ -z "$public_origin" ] || procd_append_param env BOXCTL_PUBLIC_ORIGIN="$public_origin"
+	[ "$enable_external_dashboard" = 0 ] || procd_append_param env BOXCTL_ENABLE_UNSAFE_EXTERNAL_DASHBOARD=1
+	[ -z "$tls_certificate" ] || procd_append_param env BOXCTL_TLS="$tls_certificate,$tls_key"
+	procd_set_param limits nofile="1048576 1048576"
+	procd_set_param respawn 3600 5 5
+	procd_set_param term_timeout 45
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+service_stopped() {
+	# rc.common calls this hook after procd_kill. The daemon therefore gets its
+	# SIGTERM cleanup window first; this idempotent pass also covers an earlier
+	# crash and only removes ownership-marked state.
+	if [ -f "$HANDOFF_MARKER" ]; then
+		logger -t boxctl "self-update handoff: preserving Mihomo and active dataplane"
+		return 0
+	fi
+	[ ! -x "$BOXCTL_BIN" ] || BOXCTL_ROOT="$BOXCTL_ROOT" "$BOXCTL_BIN" cleanup 2>/dev/null || true
+}
+
+reload_service() {
+	restart
+}
+
+manager_handoff() {
+	# Compatible self-updates replace the manager in-place. Keeping the procd
+	# instance alive is essential: procd intentionally kills descendants during
+	# stop/restart, including an otherwise detached Mihomo process.
+	procd_send_signal boxctl '*' 12
+}
+
+service_triggers() {
+	procd_add_reload_trigger "network" "firewall"
+}

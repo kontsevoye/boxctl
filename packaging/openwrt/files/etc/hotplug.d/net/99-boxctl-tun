@@ -1,0 +1,12 @@
+#!/bin/sh
+
+[ "$ACTION" = "add" ] || exit 0
+TUN_DEVICE=${DEVICE:-${DEVICENAME:-}}
+[ -n "$TUN_DEVICE" ] || exit 0
+BOXCTL_ROOT=/opt/boxctl
+BOXCTL_BIN="${BOXCTL_ROOT}/bin/boxctl"
+
+[ -x "$BOXCTL_BIN" ] || exit 0
+/etc/init.d/boxctl running >/dev/null 2>&1 || exit 0
+
+BOXCTL_ROOT="$BOXCTL_ROOT" "$BOXCTL_BIN" hotplug tun --interface "$TUN_DEVICE" >/dev/null 2>&1
