@@ -1,0 +1,6 @@
+proxies:
+  - name: parity-local-node
+    type: socks5
+    server: 192.168.112.15
+    port: 1080
+    udp: true

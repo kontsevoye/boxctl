@@ -1,0 +1,10 @@
+mode: direct
+log-level: warning
+allow-lan: true
+bind-address: 0.0.0.0
+mixed-port: 1080
+external-controller: 127.0.0.1:19090
+proxies: []
+proxy-groups: []
+rules:
+  - MATCH,DIRECT

@@ -125,6 +125,59 @@ and verifies its SHA-256 checksum. The VM receives a separate network interface
 only while installing packages; that interface is removed in the guest and
 disabled through QEMU QMP before the test payload is transferred.
 
+### Release parity tests
+
+The parity suite compares a separately verified official release manager
+with the current manager under the same Mihomo binary and hermetic OpenWrt
+scenario. Before running it, verify the release asset against the checksum
+published with that release. Both manager artifacts must then be supplied with
+their expected SHA-256 digest, version, and full commit; these values pin the
+exact inputs during the run but do not independently establish GitHub
+provenance:
+
+```sh
+nix develop --command tests/integration/parity-mihomo-run.sh \
+  --release-manager /path/to/release/boxctl-linux-arm64 \
+  --release-sha256 RELEASE_SHA256 \
+  --release-version RELEASE_VERSION \
+  --release-commit RELEASE_COMMIT \
+  --current-manager /path/to/current/boxctl-linux-arm64 \
+  --current-sha256 CURRENT_SHA256 \
+  --current-version CURRENT_VERSION \
+  --current-commit CURRENT_COMMIT \
+  --mihomo /path/to/mihomo-linux-arm64 \
+  --output /path/to/new/mihomo-result
+```
+
+The command runs two clean VMs and requires their normalized observable
+contracts to be byte-identical. The contract covers fake-IP and ordinary DNS,
+captured data transfer, local and remote rule providers, local and remote proxy
+providers, reserved-address bypass, rejection, listeners, nftables ownership,
+and policy routing. Only the concrete fake-IP allocation is normalized.
+
+After that comparison passes, run the current manager with sing-box and bind
+the semantic comparison to the complete Mihomo result directory:
+
+```sh
+nix develop --command tests/integration/parity-singbox-run.sh \
+  --manager /path/to/current/boxctl-linux-arm64 \
+  --manager-sha256 CURRENT_SHA256 \
+  --manager-version CURRENT_VERSION \
+  --manager-commit CURRENT_COMMIT \
+  --sing-box /path/to/sing-box-linux-arm64 \
+  --mihomo-result /path/to/mihomo-result \
+  --output /path/to/new/singbox-result
+```
+
+This second comparison uses identical network stimuli and checks semantic
+invariants rather than requiring engine-specific JSON to match byte for byte.
+Mihomo's native dynamic proxy-provider is intentionally recorded as an engine
+difference: the sing-box scenario verifies the supported equivalents, an
+inline selector for the local proxy and an HTTPS remote profile for the remote
+proxy. Each result directory retains manifests, exact input hashes, version
+evidence, controller snapshots, packet-policy evidence, and the generated
+contract or cross-engine matrix for audit.
+
 ## Deploy to OpenWrt
 
 Build and deploy over SSH:

@@ -1,0 +1,69 @@
+mode: rule
+log-level: warning
+external-controller: 127.0.0.1:9090
+tproxy-port: 7894
+dns:
+  enable: true
+  ipv6: false
+  listen: 0.0.0.0:7874
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.0/15
+  fake-ip-filter-mode: rule
+  fake-ip-filter:
+    - DOMAIN,fake.parity.integration,fake-ip
+    - MATCH,real-ip
+  nameserver:
+    - udp://192.168.112.15:5353
+proxy-providers:
+  parity-local-proxies:
+    type: file
+    path: ./proxy-providers/parity-mihomo-local-proxies.yaml
+    health-check:
+      enable: true
+      url: http://9.9.9.20:18081/health
+      interval: 600
+      timeout: 3000
+      lazy: false
+  parity-remote-proxies:
+    type: http
+    url: http://9.9.9.21:18080/parity-mihomo-remote-proxies.yaml
+    proxy: DIRECT
+    path: ./proxy-providers/parity-mihomo-remote-proxies-cache.yaml
+    interval: 3600
+    health-check:
+      enable: true
+      url: http://9.9.9.20:18081/health
+      interval: 600
+      timeout: 3000
+      lazy: false
+proxy-groups:
+  - name: PARITY-LOCAL-PROXY
+    type: select
+    use:
+      - parity-local-proxies
+  - name: PARITY-REMOTE-PROXY
+    type: select
+    use:
+      - parity-remote-proxies
+rule-providers:
+  parity-local-rules:
+    type: file
+    behavior: ipcidr
+    format: yaml
+    path: ./rule-providers/parity-mihomo-local-rules.yaml
+  parity-remote-rules:
+    type: http
+    behavior: ipcidr
+    format: yaml
+    url: http://9.9.9.21:18080/parity-mihomo-remote-rules.yaml
+    proxy: DIRECT
+    path: ./rule-providers/parity-mihomo-remote-rules-cache.yaml
+    interval: 3600
+rules:
+  - DOMAIN,fake.parity.integration,DIRECT
+  - DOMAIN,real.parity.integration,DIRECT
+  - RULE-SET,parity-local-rules,DIRECT,no-resolve
+  - RULE-SET,parity-remote-rules,DIRECT,no-resolve
+  - IP-CIDR,9.9.9.14/32,PARITY-LOCAL-PROXY,no-resolve
+  - IP-CIDR,9.9.9.15/32,PARITY-REMOTE-PROXY,no-resolve
+  - MATCH,REJECT

@@ -1,0 +1,120 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "fakeip",
+        "tag": "parity-fake-dns",
+        "inet4_range": "198.18.0.0/15"
+      },
+      {
+        "type": "udp",
+        "tag": "parity-real-dns",
+        "server": "192.168.112.15",
+        "server_port": 5353
+      }
+    ],
+    "rules": [
+      {
+        "domain": "fake.parity.integration",
+        "action": "route",
+        "server": "parity-fake-dns"
+      }
+    ],
+    "final": "parity-real-dns",
+    "strategy": "ipv4_only",
+    "reverse_mapping": true
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "parity-local-selector",
+      "outbounds": [
+        "parity-local-proxy",
+        "parity-direct"
+      ],
+      "default": "parity-local-proxy"
+    },
+    {
+      "type": "socks",
+      "tag": "parity-local-proxy",
+      "server": "10.254.0.2",
+      "server_port": 1080,
+      "version": "5"
+    },
+    {
+      "type": "direct",
+      "tag": "parity-direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "domain": "fake.parity.integration",
+        "action": "resolve",
+        "server": "parity-real-dns",
+        "strategy": "ipv4_only"
+      },
+      {
+        "domain": "fake.parity.integration",
+        "action": "route",
+        "outbound": "parity-direct"
+      },
+      {
+        "rule_set": "parity-local-rules",
+        "action": "resolve",
+        "server": "parity-real-dns",
+        "strategy": "ipv4_only"
+      },
+      {
+        "rule_set": "parity-local-rules",
+        "action": "route",
+        "outbound": "parity-direct"
+      },
+      {
+        "rule_set": "parity-remote-rules",
+        "action": "resolve",
+        "server": "parity-real-dns",
+        "strategy": "ipv4_only"
+      },
+      {
+        "rule_set": "parity-remote-rules",
+        "action": "route",
+        "outbound": "parity-direct"
+      },
+      {
+        "ip_cidr": "9.9.9.14/32",
+        "action": "route",
+        "outbound": "parity-local-selector"
+      },
+      {
+        "ip_cidr": "9.9.9.16/32",
+        "action": "reject"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "local",
+        "tag": "parity-local-rules",
+        "format": "source",
+        "path": "/opt/boxctl/parity-singbox-local-rule-set.json"
+      },
+      {
+        "type": "remote",
+        "tag": "parity-remote-rules",
+        "format": "source",
+        "url": "http://192.168.112.15:18080/parity-singbox-remote-rule-set.json",
+        "initial_path": "/opt/boxctl/parity-singbox-remote-rule-set-initial.json",
+        "update_interval": "1h"
+      }
+    ],
+    "final": "parity-direct",
+    "default_domain_resolver": {
+      "server": "parity-real-dns",
+      "strategy": "ipv4_only"
+    }
+  }
+}

@@ -23,11 +23,16 @@ POSIX_SHELL_SCRIPTS := \
 	scripts/test-release-notes.sh \
 	scripts/validate-calver.sh \
 	tests/integration/guest/run.sh \
+	tests/integration/guest/parity-mihomo.sh \
+	tests/integration/guest/parity-singbox.sh \
 	tests/integration/guest/singbox-traffic.sh \
 	tests/integration/guest/traffic.sh
 BASH_SHELL_SCRIPTS := \
 	scripts/build-openwrt-apk.sh \
 	tests/integration/fetch-openwrt.sh \
+	tests/integration/parity-mihomo-run.sh \
+	tests/integration/parity-run-one.sh \
+	tests/integration/parity-singbox-run.sh \
 	tests/integration/run.sh
 SHELL_SCRIPTS := $(POSIX_SHELL_SCRIPTS) $(BASH_SHELL_SCRIPTS)
 OPENWRT_INTEGRATION_FILES := \
