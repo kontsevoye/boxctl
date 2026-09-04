@@ -279,6 +279,8 @@ func TestUpgradePersistenceFilesCoverBoxctl(t *testing.T) {
 		{"!etc/config/boxctl", "/etc/config/boxctl"},
 		{"!etc/hotplug.d/iface/40-boxctl", "/etc/hotplug.d/iface/40-boxctl"},
 		{"!etc/hotplug.d/net/99-boxctl-tun", "/etc/hotplug.d/net/99-boxctl-tun"},
+		{"!etc/rc.d/K79boxctl", "/etc/rc.d/K79boxctl"},
+		{"!etc/rc.d/S21boxctl", "/etc/rc.d/S21boxctl"},
 	} {
 		if !strings.Contains(protected, expected.protected) || !strings.Contains(keep, expected.keep) {
 			t.Errorf("upgrade persistence is missing %s", expected.keep)

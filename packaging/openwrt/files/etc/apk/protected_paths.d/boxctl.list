@@ -1,7 +1,9 @@
 !opt/boxctl/
-!etc/init.d/boxctl
 !etc/config/boxctl
+!etc/init.d/boxctl
 !etc/hotplug.d/iface/40-boxctl
 !etc/hotplug.d/net/99-boxctl-tun
+!etc/rc.d/K79boxctl
+!etc/rc.d/S21boxctl
 !lib/upgrade/keep.d/boxctl
 !etc/apk/protected_paths.d/boxctl.list
