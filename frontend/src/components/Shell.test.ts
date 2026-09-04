@@ -48,7 +48,7 @@ describe('responsive application drawer', () => {
         value: {
           capabilities: { coreName: 'mihomo', pages: { status: true }, actions: {} },
           refreshCapabilities: async () => undefined,
-          session: { authenticated: true, user: { id: 'admin' }, csrfToken: 'token', expiresAt: '' },
+          session: { authenticated: true, user: { id: 'admin', displayName: 'Administrator' }, csrfToken: 'token', expiresAt: '' },
         },
       }, createElement(Shell, { route: '/', children: createElement('div') })),
     ))
@@ -58,6 +58,10 @@ describe('responsive application drawer', () => {
     expect(markup).toContain('aria-expanded="false"')
     expect(markup).toContain('id="app-navigation-panel"')
     expect(markup).toContain('class="du-menu nav-menu"')
+    expect(markup).toContain('class="boxctl-version sidebar-version"')
+    expect(markup).toContain('class="sidebar-language-switch"')
+    expect(markup).toContain('>Sign out</span>')
+    expect(markup).not.toContain('Administrator')
     expect(markup).toContain('<button type="button" class="du-btn du-btn-square du-btn-ghost mobile-nav-trigger"')
     expect(markup).not.toContain('<label for="app-navigation"')
     vi.unstubAllGlobals()

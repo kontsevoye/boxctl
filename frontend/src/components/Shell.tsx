@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { FileCode2, Gauge, ListTree, Menu, Network, Play, RefreshCw, RotateCcw, ScrollText, Settings, Square, Waypoints, X, type LucideIcon } from 'lucide-react'
+import { FileCode2, Gauge, ListTree, LogOut, Menu, Network, Play, RefreshCw, RotateCcw, ScrollText, Settings, Square, Waypoints, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { logout, request } from '../api'
 import { requestAppRefresh } from '../app-events'
@@ -10,6 +10,7 @@ import { useI18n } from '../i18n'
 import { navigate, type Route } from '../router'
 import type { Capabilities, StatusSnapshot } from '../types'
 import { Brand } from './Brand'
+import { BoxctlVersion, BoxctlVersionProvider } from './BoxctlVersion'
 import { AmbientBackdrop } from './effects'
 import { Toast } from './Toast'
 
@@ -45,7 +46,7 @@ export function coreControlAvailability(state: string) {
 }
 
 export function Shell({ route, children }: { route: Route; children: ReactNode }) {
-  const { capabilities, refreshCapabilities, session } = useApp()
+  const { capabilities, refreshCapabilities } = useApp()
   const { locale, setLocale, t } = useI18n()
   const items = navigationItems(t)
   const [controlBusy, setControlBusy] = useState('')
@@ -107,7 +108,7 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
     }
   }
 
-  return <div className="du-drawer app-shell">
+  return <BoxctlVersionProvider version={status.data?.version}><div className="du-drawer app-shell">
     <AmbientBackdrop />
     <input id="app-navigation" type="checkbox" className="du-drawer-toggle" checked={drawerOpen} aria-hidden="true" tabIndex={-1} onChange={(event) => setDrawerOpen(event.currentTarget.checked)} />
     <section className="du-drawer-content workspace" inert={drawerOpen ? true : undefined}>
@@ -153,16 +154,16 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
           </ul>
         </nav>
         <footer className="sidebar-footer">
-          <div className="du-tabs du-tabs-box language-switch compact" role="tablist" aria-label={t('language')}>
-            <button className={`du-tab ${locale === 'ru' ? 'du-tab-active' : ''}`} role="tab" aria-selected={locale === 'ru'} onClick={() => setLocale('ru')}>RU</button>
-            <button className={`du-tab ${locale === 'en' ? 'du-tab-active' : ''}`} role="tab" aria-selected={locale === 'en'} onClick={() => setLocale('en')}>EN</button>
-          </div>
-          <div className="user-row">
-            <span title={session.user.displayName ?? session.user.id}>{session.user.displayName ?? session.user.id}</span>
-            <button className="du-btn du-btn-ghost du-btn-xs" onClick={signOut}>{t('logout')}</button>
+          <BoxctlVersion className="sidebar-version" />
+          <div className="sidebar-footer-actions">
+            <div className="sidebar-language-switch" role="tablist" aria-label={t('language')}>
+              <button className={locale === 'ru' ? 'active' : ''} type="button" role="tab" aria-selected={locale === 'ru'} onClick={() => setLocale('ru')}>RU</button>
+              <button className={locale === 'en' ? 'active' : ''} type="button" role="tab" aria-selected={locale === 'en'} onClick={() => setLocale('en')}>EN</button>
+            </div>
+            <button className="sidebar-sign-out" type="button" onClick={signOut}><LogOut size={15} strokeWidth={1.9} aria-hidden="true" /><span>{t('logout')}</span></button>
           </div>
         </footer>
       </aside>
     </div>
-  </div>
+  </div></BoxctlVersionProvider>
 }

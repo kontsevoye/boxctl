@@ -4,6 +4,7 @@ import { useApp } from '../app-context'
 import { canPerform, canShowPage } from '../capabilities'
 import { ChoiceField } from '../components/ChoiceField'
 import { ErrorPanel, Loading, PageHeader } from '../components/Common'
+import { BoxctlVersion } from '../components/BoxctlVersion'
 import { Toast } from '../components/Toast'
 import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
@@ -234,6 +235,7 @@ export function SettingsPage() {
       <div className="form-actions"><button className="du-btn du-btn-primary du-btn-sm" disabled={busy}>{busy ? t('saving') : t('save')}</button></div>
     </form>}
     {canShowPage(capabilities, 'backups') && <section className="settings-backups"><BackupsPage /></section>}
+    <footer className="settings-product-footer"><BoxctlVersion className="settings-product-version" /></footer>
   </>
 }
 
