@@ -283,6 +283,36 @@ func TestServeStartStoppedBuildsManagementAndMonitorsWithoutInitialStart(t *test
 	}
 }
 
+func TestServeAdoptedHandoffOverridesStartStoppedLifecycleAction(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	lifecycle := &testLifecycle{monitorDone: make(chan struct{})}
+	actions := newIsolatedActions(t, io.Discard)
+	actions.listen = func(string, string) (net.Listener, error) {
+		return newCancelListener(cancel), nil
+	}
+	actions.buildServe = func(context.Context, string, serveBuildOptions, openwrt.Runner, *slog.Logger, *eventlog.Ring) (*serveRuntime, error) {
+		return &serveRuntime{
+			Handler:              http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+			Lifecycle:            lifecycle,
+			HandoffMarkerPending: true,
+		}, nil
+	}
+	if err := actions.Serve(ctx, cli.ServeOptions{
+		Root: t.TempDir(), Listen: "127.0.0.1:9091", StartStopped: true,
+	}); err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	select {
+	case <-lifecycle.monitorDone:
+	case <-time.After(time.Second):
+		t.Fatal("monitor was not canceled")
+	}
+	starts, stops, monitors := lifecycle.counts()
+	if starts != 0 || stops != 1 || monitors != 1 {
+		t.Fatalf("adopted handoff lifecycle calls: start=%d stop=%d monitor=%d", starts, stops, monitors)
+	}
+}
+
 type adoptionStub struct {
 	prepared engine.PreparedCore
 	health   engine.HealthStatus

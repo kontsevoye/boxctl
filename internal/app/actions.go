@@ -262,7 +262,11 @@ func (actions *Actions) Serve(ctx context.Context, options cli.ServeOptions) (re
 		if ownsOpenWrt {
 			ownerMayBeDirty = true
 		}
-		if options.StartStopped {
+		if runtimeState.HandoffMarkerPending {
+			// defaultServeRuntime already adopted the exact live generation for a
+			// verified manager handoff. In particular, preserve it even when this
+			// procd instance still carries the first-install --start-stopped argv.
+		} else if options.StartStopped {
 			// Management-only startup is also a fail-open recovery point. A
 			// predecessor may have died after installing owned DNS/capture state but
 			// before persisting the successful first-start decision. Reconcile that
