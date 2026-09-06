@@ -115,7 +115,7 @@ export function LogsPage({ initialKind = 'core' }: { initialKind?: LogKind }) {
     {!streamReady && <Loading />}
     {streamReady && filtered.length === 0 && <Empty />}
     {filtered.length > 0 && <div id={`${kind}-log-stream`} ref={logView} className="log-view" role="log" aria-live="off">{filtered.map((entry, index) => <div className={`log-line level-${entry.level}`} key={`${entry.time}:${index}`}>
-      <time>{formatDate(entry.time, locale)}</time><span className="log-level">{entry.level}</span><span className="log-component">{entry.component ?? 'system'}</span><span className="log-message">{entry.message}</span>
+      <time>{formatDate(entry.time, locale)}</time><span className="log-level">{entry.level}</span><span className="log-component" title={entry.component ?? 'system'}>{entry.component ?? 'system'}</span><span className="log-message">{entry.message}</span>
     </div>)}</div>}
   </>
 }

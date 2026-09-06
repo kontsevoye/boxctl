@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { AppContext } from '../app-context'
 import { I18nProvider } from '../i18n'
-import { activateConfigurationTab, ConfigurationPage, configurationTabs } from './ConfigurationPage'
+import { activateConfigurationTab, ConfigurationPage, configurationRouteTarget, configurationTabs } from './ConfigurationPage'
 
 describe('configurationTabs', () => {
   it('keeps profiles available and adds the editor only when supported', () => {
@@ -15,6 +15,11 @@ describe('configurationTabs', () => {
   it('mounts a tab only after its first activation and keeps it mounted', () => {
     expect(activateConfigurationTab(['profiles'], 'editor')).toEqual(['profiles', 'editor'])
     expect(activateConfigurationTab(['profiles', 'editor'], 'editor')).toEqual(['profiles', 'editor'])
+  })
+
+  it('accepts only a supported engine and a non-empty profile from a deep link', () => {
+    expect(configurationRouteTarget('?engine=sing-box&profile=sing-box%3Ahome')).toEqual({ engine: 'sing-box', profileID: 'sing-box:home' })
+    expect(configurationRouteTarget('?engine=unknown&profile=%20')).toEqual({})
   })
 
   it('does not render inactive panels before they are visited', () => {

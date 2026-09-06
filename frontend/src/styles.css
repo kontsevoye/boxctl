@@ -249,11 +249,11 @@ code { border: 1px solid var(--border); border-radius: .4rem; background: var(--
 
 .panel, .metric-card, .profile-card { min-width: 0; border: 1px solid var(--border); border-radius: 1rem; background: var(--surface-glass); box-shadow: 0 14px 36px rgb(0 0 0 / 12%); backdrop-filter: blur(14px); }
 .panel { padding: 1.15rem; }
-.metrics-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 1rem; }
-.metric-card { position: relative; min-height: 9rem; display: flex; flex-direction: column; justify-content: flex-end; padding: 1.15rem; overflow: hidden; }
-.metric-card.emphasized { grid-column: span 2; background: linear-gradient(145deg, color-mix(in srgb, var(--accent-strong) 15%, var(--panel)), color-mix(in srgb, var(--accent-violet) 11%, var(--panel))); }
-.metric-card.metric-profile { grid-column: span 2; }
-.metric-card.resource-card { grid-column: span 1; }
+.metrics-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 1rem; }
+.metric-card { position: relative; min-height: 9rem; grid-column: span 3; display: flex; flex-direction: column; justify-content: flex-end; padding: 1.15rem; overflow: hidden; }
+.metric-card.emphasized { grid-column: span 4; background: linear-gradient(145deg, color-mix(in srgb, var(--accent-strong) 15%, var(--panel)), color-mix(in srgb, var(--accent-violet) 11%, var(--panel))); }
+.metric-card.metric-profile, .metric-card.metric-engine { grid-column: span 4; }
+.metric-card.resource-card { grid-column: span 3; }
 .metric-card > .status-dot { position: absolute; top: 1.15rem; right: 1.15rem; }
 .metric-card strong { overflow: hidden; font-size: 1.3rem; text-overflow: ellipsis; white-space: nowrap; }
 .metric-label { color: var(--muted); font: 600 .68rem/1.25 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .075em; text-transform: uppercase; margin-bottom: .4rem; }
@@ -377,6 +377,11 @@ td small { margin-top: .2rem; }
 .spotlight-card::before { position: absolute; z-index: 0; inset: 0; border-radius: inherit; background: radial-gradient(22rem circle at var(--spot-x) var(--spot-y), color-mix(in srgb, var(--accent) 11%, transparent), transparent 62%); opacity: 0; content: ""; pointer-events: none; transition: opacity .22s ease; }
 .spotlight-card:hover::before { opacity: 1; }
 .spotlight-card > * { position: relative; z-index: 1; }
+.spotlight-card > .metric-profile-action { position: absolute; z-index: 2; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; border: 0; background: transparent; padding: 1.15rem; color: inherit; cursor: pointer; text-align: left; }
+.metric-profile-action:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.metric-profile-action:focus-visible { outline-offset: -4px; }
+.metric-profile-action-icon { position: absolute; top: 1.1rem; right: 1.1rem; color: var(--accent); opacity: .72; transition: opacity .15s, transform .15s; }
+.metric-profile-action:hover .metric-profile-action-icon { opacity: 1; transform: translate(1px, -1px); }
 .signal-beam { position: absolute; top: 0; left: 1.25rem; right: 1.25rem; height: 1px; overflow: hidden; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 36%, transparent), transparent); }
 .signal-beam span { display: block; width: 28%; height: 100%; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: signal-scan 4s ease-in-out infinite; }
 @keyframes ambient-drift { to { transform: translate3d(5rem, 2rem, 0) scale(1.08); } }
@@ -388,9 +393,11 @@ td small { margin-top: .2rem; }
 .log-filters label { min-width: 0; }
 .log-filters .grow { min-width: 0; }
 .log-view { overflow: auto; max-height: calc(100vh - 10rem); border: 1px solid var(--border); border-radius: .85rem; background: #070b12; padding: .5rem 0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.log-line { display: grid; grid-template-columns: 10.5rem 3.5rem 7rem minmax(20rem, 1fr); gap: .6rem; padding: .24rem .65rem; border-left: 2px solid transparent; }
+.log-line { display: grid; grid-template-columns: 10.5rem 3.5rem minmax(11rem, 14rem) minmax(0, 1fr); gap: .6rem; padding: .24rem .65rem; border-left: 2px solid transparent; }
+.log-line > * { min-width: 0; }
 .log-line:hover { background: #101827; }
 .log-line time, .log-component { color: #71829a; }
+.log-component { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log-level { color: #9fb0c8; text-transform: uppercase; }
 .level-error { border-left-color: var(--danger); }
 .level-error .log-level { color: #ff9baa; }
@@ -446,13 +453,13 @@ td small { margin-top: .2rem; }
 .settings-product-version .boxctl-version-icon { width: 1.75rem; height: 1.75rem; border-radius: 999px; }
 .settings-product-version .boxctl-version-copy { display: flex; align-items: baseline; gap: .4rem; }
 
-@media (max-width: 1500px) {
-  .metrics-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1280px) {
+  .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-card, .metric-card.emphasized, .metric-card.metric-profile, .metric-card.metric-engine, .metric-card.resource-card { grid-column: auto; }
+  .metrics-grid > .metric-card:last-child { grid-column: 1 / -1; }
 }
 
 @media (max-width: 1050px) {
-  .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .metric-card.emphasized, .metric-card.metric-profile { grid-column: auto; }
   .proxy-grid, .fake-ip-editors { grid-template-columns: 1fr; }
   .log-line { grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .75rem; padding: .55rem .65rem; }
   .log-component { display: none; }
@@ -492,6 +499,7 @@ td small { margin-top: .2rem; }
   .page-header { display: grid; }
   .page-actions { justify-content: flex-start; }
   .metrics-grid, .form-grid, .traffic-row, .toggle-grid, .backup-grid, .fake-ip-counts { grid-template-columns: 1fr; }
+  .metrics-grid > .metric-card:last-child { grid-column: auto; }
   .fake-ip-panel { gap: .85rem; padding: .9rem; }
   .fake-ip-panel .title-row { align-items: flex-start; }
   .fake-ip-panel .title-row h2, .fake-ip-badges { width: 100%; }

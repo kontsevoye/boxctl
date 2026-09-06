@@ -1,8 +1,10 @@
 import { useEffect } from 'react'
+import { PencilLine } from 'lucide-react'
 import { Badge, ErrorPanel, formatBytes, formatDuration, Loading, PageHeader } from '../components/Common'
 import { SignalBeam, SpotlightCard } from '../components/effects'
 import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
+import { navigate, type RouteQuery } from '../router'
 import type { StatusSnapshot } from '../types'
 
 export function StatusPage() {
@@ -22,10 +24,11 @@ export function StatusPage() {
   </>
 }
 
-function StatusContent({ status }: { status: StatusSnapshot }) {
+export function StatusContent({ status }: { status: StatusSnapshot }) {
   const { t } = useI18n()
   const engine = status.runningEngine ?? status.core.name
   const selected = status.selectedEngine ?? status.activeProfile?.engine ?? status.core.name
+  const activeProfile = status.activeProfile
   return <div className="page-stack">
     <section className="metrics-grid">
       <SpotlightCard className="du-card metric-card emphasized metric-health">
@@ -34,8 +37,13 @@ function StatusContent({ status }: { status: StatusSnapshot }) {
         <span className="metric-label">{status.healthy ? t('healthy') : t('unhealthy')}</span>
         <strong>{status.core.state || '—'}</strong>
       </SpotlightCard>
-      <SpotlightCard className="du-card metric-card metric-profile"><span className="metric-label">{t('activeProfile')}</span><strong>{status.activeProfile?.name ?? '—'}</strong><small>{status.activeProfile?.engine ?? status.selectedEngine ?? '—'}</small></SpotlightCard>
-      <SpotlightCard className="du-card metric-card"><span className="metric-label">{t('selectedEngine')}</span><strong>{selected || '—'}</strong><small>{t('runningEngine')}: {engine || '—'}</small></SpotlightCard>
+      <SpotlightCard className="du-card metric-card metric-profile">{activeProfile
+        ? <button className="metric-profile-action" type="button" title={t('editActiveProfile')} aria-label={`${t('editActiveProfile')}: ${activeProfile.name}`} onClick={() => navigate('/config', false, profileConfigurationQuery(activeProfile))}>
+          <span className="metric-label">{t('activeProfile')}</span><strong>{activeProfile.name}</strong><small>{activeProfile.engine ?? status.selectedEngine ?? '—'}</small><PencilLine className="metric-profile-action-icon" size={17} aria-hidden="true" />
+        </button>
+        : <><span className="metric-label">{t('activeProfile')}</span><strong>—</strong><small>{status.selectedEngine ?? '—'}</small></>}
+      </SpotlightCard>
+      <SpotlightCard className="du-card metric-card metric-engine"><span className="metric-label">{t('selectedEngine')}</span><strong>{selected || '—'}</strong><small>{t('runningEngine')}: {engine || '—'}</small></SpotlightCard>
       <SpotlightCard className="du-card metric-card"><span className="metric-label">{t('boxctlUptime')}</span><strong>{formatDuration(status.boxctlUptimeSeconds)}</strong></SpotlightCard>
       <SpotlightCard className="du-card metric-card"><span className="metric-label">{t('coreUptime')}</span><strong>{formatDuration(status.coreUptimeSeconds)}</strong></SpotlightCard>
       <ProcessCard label={t('managerResources')} stats={status.resources?.manager} />
@@ -56,6 +64,10 @@ function StatusContent({ status }: { status: StatusSnapshot }) {
       <div className="notice-list">{status.warnings.map((warning) => <div className="notice" key={warning.code}><Badge tone="warning">{warning.level ?? warning.code}</Badge><span>{warning.message}</span></div>)}</div>
     </SpotlightCard>}
   </div>
+}
+
+export function profileConfigurationQuery(profile: NonNullable<StatusSnapshot['activeProfile']>): RouteQuery {
+  return { engine: profile.engine, profile: profile.id }
 }
 
 function ProcessCard({ label, stats }: { label: string; stats?: { memoryBytes: number; cpuPercent?: number } }) {

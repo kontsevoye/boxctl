@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { configFileAccept, copyRawConfig, normalizeRawConfigContent, rawConfigDocumentMatchesDraft, rawConfigFormatLabel, reconcileRawConfigAfterSave, selectConfigProfile, shouldApplyRawConfigReload, shouldRecoverRawConfigSave, shouldUseLegacyRawConfig } from './RawConfigPage'
+import { canActivateConfigProfile, configFileAccept, copyRawConfig, normalizeRawConfigContent, rawConfigDocumentMatchesDraft, rawConfigFormatLabel, reconcileRawConfigAfterSave, selectConfigProfile, shouldApplyRawConfigReload, shouldRecoverRawConfigSave, shouldUseLegacyRawConfig } from './RawConfigPage'
 
 describe('raw configuration editor state', () => {
   it('accepts the initial document and clean background reloads', () => {
@@ -47,6 +47,15 @@ describe('raw configuration editor state', () => {
     ]
     expect(selectConfigProfile(profiles, '')?.id).toBe('two')
     expect(selectConfigProfile(profiles, 'one')?.id).toBe('one')
+  })
+
+  it('only enables activation for an inactive profile with its compatible installed engine', () => {
+    const profile = { active: false, engine: 'sing-box' as const }
+    expect(canActivateConfigProfile(profile, { id: 'sing-box', installed: true, compatible: true })).toBe(true)
+    expect(canActivateConfigProfile({ ...profile, active: true }, { id: 'sing-box', installed: true, compatible: true })).toBe(false)
+    expect(canActivateConfigProfile(profile, { id: 'sing-box', installed: false, compatible: true })).toBe(false)
+    expect(canActivateConfigProfile(profile, { id: 'mihomo', installed: true, compatible: true })).toBe(false)
+    expect(canActivateConfigProfile(profile, { id: 'sing-box', installed: true, compatible: true }, true)).toBe(false)
   })
 
   it('uses engine-native extensions for config import', () => {

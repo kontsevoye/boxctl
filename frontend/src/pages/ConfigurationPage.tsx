@@ -12,6 +12,7 @@ import './ConfigurationPage.css'
 
 export type ConfigurationTab = 'profiles' | 'subscriptions' | 'editor'
 export type EngineFilter = 'active' | EngineID
+export interface ConfigurationRouteTarget { engine?: EngineID; profileID?: string }
 
 export function configurationTabs(rawConfigAvailable: boolean, subscriptionsAvailable = true): ConfigurationTab[] {
   return [
@@ -29,7 +30,9 @@ export function ConfigurationPage({ initialTab = 'editor' }: { initialTab?: Conf
   const { capabilities, engines: catalog } = useApp()
   const { t } = useI18n()
   const engines = catalog && catalog.length > 0 ? catalog : [legacyEngine(capabilities)]
-  const [engineFilter, setEngineFilter] = useState<EngineFilter>('active')
+  const routeTarget = configurationRouteTarget(typeof window === 'undefined' ? '' : window.location.search)
+  const initialEngineFilter = routeTarget.engine && engines.some((engine) => engine.id === routeTarget.engine) ? routeTarget.engine : 'active'
+  const [engineFilter, setEngineFilter] = useState<EngineFilter>(initialEngineFilter)
   const [editorDirty, setEditorDirty] = useState(false)
   const engine = resolveEngineFilter(engines, engineFilter)
   const rawConfigAvailable = catalog !== undefined || canShowPage(capabilities, 'rawConfig')
@@ -65,11 +68,21 @@ export function ConfigurationPage({ initialTab = 'editor' }: { initialTab?: Conf
       <ProfilesPage embedded engine={engine} />
     </div>}
     {tabs.includes('editor') && mountedTabs.includes('editor') && <div id="configuration-editor" role="tabpanel" hidden={tab !== 'editor'} aria-hidden={tab !== 'editor'}>
-      <RawConfigPage embedded engine={engine} onDirtyChange={setEditorDirty} />
+      <RawConfigPage embedded engine={engine} initialProfileID={routeTarget.profileID} onDirtyChange={setEditorDirty} />
     </div>}
   </>
 }
 
 export function resolveEngineFilter(engines: EngineInfo[], filter: EngineFilter): EngineInfo | undefined {
   return filter === 'active' ? selectedEngine(engines) : engines.find((engine) => engine.id === filter)
+}
+
+export function configurationRouteTarget(search: string): ConfigurationRouteTarget {
+  const params = new URLSearchParams(search)
+  const requestedEngine = params.get('engine')
+  const profileID = params.get('profile')?.trim()
+  return {
+    ...(requestedEngine === 'mihomo' || requestedEngine === 'sing-box' ? { engine: requestedEngine } : {}),
+    ...(profileID ? { profileID } : {}),
+  }
 }

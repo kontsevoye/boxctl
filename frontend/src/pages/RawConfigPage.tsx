@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { APIError, requestWithFallback } from '../api'
+import { requestAppRefresh } from '../app-events'
+import { useApp } from '../app-context'
 import { ErrorPanel, Loading, PageHeader } from '../components/Common'
 import { Toast, type ToastTone } from '../components/Toast'
 import { YamlEditor } from '../components/YamlEditor'
+import { legacyEngine } from '../engines'
 import { useFallbackQuery, useQuery } from '../hooks'
 import { useI18n } from '../i18n'
+import { activateProfile } from '../profile-activation'
 import type { EngineInfo, Profile } from '../types'
 
 interface RawDocument {
@@ -23,12 +27,18 @@ interface Validation { valid: boolean; diagnostics?: Diagnostic[] }
 interface SaveResult { revision: string; reloadRequired: boolean; applied: boolean; apply: 'save' | 'reload' | 'restart' }
 interface ConfigNotice { tone: ToastTone; message: string; diagnostics?: Diagnostic[]; timeoutMs?: number }
 
-export function RawConfigPage({ embedded = false, engine, onDirtyChange }: { embedded?: boolean; engine?: EngineInfo; onDirtyChange?: (dirty: boolean) => void }) {
+export function RawConfigPage({ embedded = false, engine, initialProfileID = '', onDirtyChange }: { embedded?: boolean; engine?: EngineInfo; initialProfileID?: string; onDirtyChange?: (dirty: boolean) => void }) {
+  const app = useApp()
   const { t } = useI18n()
   const profilesQuery = useQuery<Profile[]>('/profiles')
   const profiles = profilesQuery.data?.filter((profile) => !engine || profile.engine === engine.id) ?? []
-  const [profileID, setProfileID] = useState('')
+  const [profileID, setProfileID] = useState(initialProfileID)
   const profile = selectConfigProfile(profiles, profileID)
+  const profileEngine = profile
+    ? app.engines?.find((candidate) => candidate.id === profile.engine)
+      ?? (engine?.id === profile.engine ? engine : undefined)
+      ?? (profile.engine === 'mihomo' ? legacyEngine(app.capabilities) : undefined)
+    : undefined
   const legacyConfig = shouldUseLegacyRawConfig(profilesQuery.data, engine)
   const documentID = profile?.id ?? (legacyConfig ? 'legacy:mihomo' : '')
   const reloadSupported = (profile?.engine ?? engine?.id) !== 'sing-box'
@@ -37,6 +47,7 @@ export function RawConfigPage({ embedded = false, engine, onDirtyChange }: { emb
   const query = useFallbackQuery<RawDocument>(primaryPath, fallbackPath, documentID !== '')
   const [content, setContent] = useState('')
   const [savedContent, setSavedContent] = useState('')
+  const canActivate = canActivateConfigProfile(profile, profileEngine, content !== savedContent)
   const [revision, setRevision] = useState('')
   const [validation, setValidation] = useState<Validation>()
   const [error, setError] = useState<APIError>()
@@ -127,6 +138,23 @@ export function RawConfigPage({ embedded = false, engine, onDirtyChange }: { emb
     }
   }
 
+  const activate = async () => {
+    if (!profile || !canActivate || !window.confirm(t('confirmActivateProfile'))) return
+    setBusy('activate')
+    setError(undefined)
+    setNotice(undefined)
+    try {
+      await activateProfile(profile.id)
+      profilesQuery.reload()
+      requestAppRefresh()
+      await app.refreshCapabilities()
+    } catch (reason) {
+      setError(reason instanceof APIError ? reason : new APIError(0, 'network_error', String(reason)))
+    } finally {
+      setBusy('')
+    }
+  }
+
   const importConfig = async (file?: File) => {
     if (!file) return
     if (file.size > 16 * 1024 * 1024) {
@@ -186,6 +214,7 @@ export function RawConfigPage({ embedded = false, engine, onDirtyChange }: { emb
     </Toast>}
     {query.data && <section className="du-card panel editor-panel">
       <div className="editor-toolbar"><span>{rawConfigFormatLabel(query.data.format)} · {revision}{query.data.pending ? ` · ${t('pendingRestart')}` : ''}</span><div>
+        {profile && <button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== '' || !canActivate} title={profile.active ? t('active') : profileEngine?.installed !== true || profileEngine.compatible !== true ? t('engineUnavailable') : content !== savedContent ? t('saveBeforeActivate') : undefined} onClick={() => void activate()}>{t('activate')}</button>}
         <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== '' || content === savedContent} onClick={() => { setContent(savedContent); setValidation(undefined); setNotice(undefined) }}>{t('revert')}</button>
         <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={validate}>{t('validate')}</button>
         <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== '' || validation?.valid === false || content === savedContent} onClick={() => void save('save')}>{t('saveOnly')}</button>
@@ -204,6 +233,10 @@ export function RawConfigPage({ embedded = false, engine, onDirtyChange }: { emb
 
 export function selectConfigProfile(profiles: Profile[], selectedID: string): Profile | undefined {
   return profiles.find((profile) => profile.id === selectedID) ?? profiles.find((profile) => profile.active) ?? profiles[0]
+}
+
+export function canActivateConfigProfile(profile?: Pick<Profile, 'active' | 'engine'>, engine?: Pick<EngineInfo, 'id' | 'installed' | 'compatible'>, dirty = false): boolean {
+  return Boolean(profile && !profile.active && !dirty && engine?.id === profile.engine && engine.installed && engine.compatible)
 }
 
 export function shouldUseLegacyRawConfig(profiles: Profile[] | undefined, engine?: Pick<EngineInfo, 'id'>): boolean {

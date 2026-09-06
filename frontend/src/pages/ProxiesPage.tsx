@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { APIError, request } from '../api'
 import { useApp } from '../app-context'
 import { canPerform } from '../capabilities'
-import { Empty, ErrorPanel, formatBytes, Loading } from '../components/Common'
+import { Empty, ErrorPanel, formatBytes, Loading, PageHeader } from '../components/Common'
 import { ProvidersPanel } from '../components/ProvidersPanel'
 import { useCoreDashboard } from '../core-dashboard'
 import { useI18n } from '../i18n'
@@ -161,10 +161,11 @@ export function ProxiesPage() {
   }
 
   return <>
+    <PageHeader title={t('proxies')} />
     {error && <ErrorPanel error={error} />}
     <section className="proxies-workspace">
       <header className="proxies-heading">
-        <h1>{t('proxies')}</h1>
+        <h2>{t('proxyControl')}</h2>
         <span>{t('groups')} · {t('providers')} · {dashboard.streamState === 'open' ? t('live') : t('reconnecting')}</span>
         {dashboard.dashboard?.traffic && <div className="proxy-live-traffic" aria-label={t('traffic')}>
           <span>↓ {formatBytes(dashboard.dashboard.traffic.downloadRateBytes)}/s</span>

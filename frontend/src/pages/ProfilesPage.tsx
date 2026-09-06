@@ -6,7 +6,10 @@ import { Badge, Empty, ErrorPanel, formatDate, Loading, PageHeader } from '../co
 import { legacyEngine, selectedEngine } from '../engines'
 import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
+import { activateProfile } from '../profile-activation'
 import type { EngineID, EngineInfo, Profile } from '../types'
+
+export { profileActivationPayload } from '../profile-activation'
 
 export function ProfilesPage({ embedded = false, engine }: { embedded?: boolean; engine?: EngineInfo }) {
   const app = useApp()
@@ -56,7 +59,7 @@ export function ProfilesPage({ embedded = false, engine }: { embedded?: boolean;
     setError(undefined)
     try {
       const id = encodeURIComponent(profile.id)
-      if (action === 'activate') await request(`/profiles/${id}/activate`, { method: 'POST', body: JSON.stringify(profileActivationPayload()) })
+      if (action === 'activate') await activateProfile(profile.id)
       if (action === 'delete') await request(`/profiles/${id}`, { method: 'DELETE' })
       if (action === 'refresh') await request(`/profiles/${id}/refresh`, { method: 'POST', body: '{}' })
       if (action === 'detach') await request(`/profiles/${id}/source/detach`, { method: 'POST', body: '{}' })
@@ -154,10 +157,6 @@ export function ProfilesPage({ embedded = false, engine }: { embedded?: boolean;
 }
 
 export type ProfileSourceMode = 'remote' | 'local'
-
-export function profileActivationPayload() {
-  return { confirmRestart: true }
-}
 
 export function profileDraftPayload(name: string, sourceMode: ProfileSourceMode, sourceURL: string, content: string, interval: number | '', engine: EngineID = 'mihomo') {
   return {

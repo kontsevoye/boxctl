@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeRoute } from './router'
+import { normalizeRoute, routeLocation } from './router'
 
 describe('normalizeRoute', () => {
   it('recognizes all management pages', () => {
@@ -19,5 +19,11 @@ describe('normalizeRoute', () => {
   it('fails closed to the status page for unknown paths', () => {
     expect(normalizeRoute('/unknown')).toBe('/')
     expect(normalizeRoute('//evil.example')).toBe('/')
+  })
+
+  it('builds an encoded route without retaining empty query values', () => {
+    expect(routeLocation('/config', { engine: 'sing-box', profile: 'sing-box:Home / main', unused: undefined }))
+      .toBe('/config?engine=sing-box&profile=sing-box%3AHome+%2F+main')
+    expect(routeLocation('/config')).toBe('/config')
   })
 })
