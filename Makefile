@@ -18,6 +18,7 @@ POSIX_SHELL_SCRIPTS := \
 	scripts/calver.sh \
 	scripts/deploy-openwrt.sh \
 	scripts/release-notes.sh \
+	scripts/precompress-frontend.sh \
 	scripts/test-calver.sh \
 	scripts/test-deploy-openwrt.sh \
 	scripts/test-release-notes.sh \
@@ -72,6 +73,7 @@ test-scripts:
 
 frontend:
 	npm --prefix frontend run build
+	sh scripts/precompress-frontend.sh internal/web/static
 
 frontend-test:
 	npm --prefix frontend test

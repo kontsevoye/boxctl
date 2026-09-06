@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -598,6 +599,12 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "index.html"
 	}
+	// Precompressed representations are implementation details selected through
+	// content negotiation; never expose them as separate public assets.
+	if strings.HasSuffix(name, ".gz") {
+		http.NotFound(w, r)
+		return
+	}
 	staticFS, _ := fs.Sub(embeddedStatic, "static")
 	if info, err := fs.Stat(staticFS, name); err == nil && !info.IsDir() {
 		if name == "index.html" {
@@ -606,6 +613,9 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.HasPrefix(name, "assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			if s.servePrecompressed(w, r, staticFS, name) {
+				return
+			}
 		}
 		r.URL.Path = "/" + name
 		s.static.ServeHTTP(w, r)
@@ -617,6 +627,76 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	s.serveIndex(w, r, staticFS)
+}
+
+func (s *Server) servePrecompressed(w http.ResponseWriter, r *http.Request, staticFS fs.FS, name string) bool {
+	if strings.HasSuffix(name, ".gz") {
+		return false
+	}
+	compressedName := name + ".gz"
+	info, err := fs.Stat(staticFS, compressedName)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	appendVary(w.Header(), "Accept-Encoding")
+	if !acceptsEncoding(r.Header.Get("Accept-Encoding"), "gzip") {
+		return false
+	}
+	content, err := fs.ReadFile(staticFS, compressedName)
+	if err != nil {
+		return false
+	}
+	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.Header().Set("Content-Encoding", "gzip")
+	http.ServeContent(w, r, path.Base(name), info.ModTime(), bytes.NewReader(content))
+	return true
+}
+
+func appendVary(header http.Header, value string) {
+	for _, current := range header.Values("Vary") {
+		for _, item := range strings.Split(current, ",") {
+			if strings.EqualFold(strings.TrimSpace(item), value) {
+				return
+			}
+		}
+	}
+	header.Add("Vary", value)
+}
+
+func acceptsEncoding(header, wanted string) bool {
+	explicit := false
+	explicitAccepted := false
+	wildcardAccepted := false
+	for _, item := range strings.Split(header, ",") {
+		parts := strings.Split(item, ";")
+		encoding := strings.ToLower(strings.TrimSpace(parts[0]))
+		quality := 1.0
+		for _, parameter := range parts[1:] {
+			key, value, ok := strings.Cut(strings.TrimSpace(parameter), "=")
+			if !ok || !strings.EqualFold(strings.TrimSpace(key), "q") {
+				continue
+			}
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			if err != nil || parsed < 0 || parsed > 1 {
+				quality = 0
+			} else {
+				quality = parsed
+			}
+		}
+		switch {
+		case strings.EqualFold(encoding, wanted):
+			explicit = true
+			explicitAccepted = quality > 0
+		case encoding == "*":
+			wildcardAccepted = quality > 0
+		}
+	}
+	if explicit {
+		return explicitAccepted
+	}
+	return wildcardAccepted
 }
 
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request, staticFS fs.FS) {

@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -341,6 +342,84 @@ func TestEmbeddedSPAAndSecurityHeaders(t *testing.T) {
 	missingAsset := perform(handler, http.MethodGet, "/assets/missing.js", "", nil, "")
 	if missingAsset.Code != http.StatusNotFound {
 		t.Fatalf("missing asset = %d, want 404", missingAsset.Code)
+	}
+}
+
+func TestEmbeddedAssetsUsePrecompressedRepresentation(t *testing.T) {
+	entries, err := embeddedStatic.ReadDir("static/assets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := ""
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".js") {
+			asset = entry.Name()
+			break
+		}
+	}
+	if asset == "" {
+		t.Fatal("embedded JavaScript asset is missing")
+	}
+	want, err := embeddedStatic.ReadFile("static/assets/" + asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newTestHandler(t, Services{Credentials: fakeCredentials{}, SessionSecrets: &memorySecretStore{}})
+	requestPath := "/assets/" + asset
+
+	compressed := performWithHeaders(handler, http.MethodGet, requestPath, "", nil, nil, "", map[string]string{
+		"Accept-Encoding": "br, gzip",
+	})
+	if compressed.Code != http.StatusOK || compressed.Header().Get("Content-Encoding") != "gzip" ||
+		!strings.Contains(compressed.Header().Get("Vary"), "Accept-Encoding") ||
+		compressed.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" ||
+		!strings.Contains(compressed.Header().Get("Content-Type"), "javascript") {
+		t.Fatalf("compressed asset = %d headers=%v", compressed.Code, compressed.Header())
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(compressed.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if err != nil || closeErr != nil {
+		t.Fatal(errors.Join(err, closeErr))
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("precompressed asset does not decode to the original")
+	}
+
+	plain := performWithHeaders(handler, http.MethodGet, requestPath, "", nil, nil, "", map[string]string{
+		"Accept-Encoding": "gzip;q=0, *;q=1",
+	})
+	if plain.Code != http.StatusOK || plain.Header().Get("Content-Encoding") != "" || !bytes.Equal(plain.Body.Bytes(), want) ||
+		!strings.Contains(plain.Header().Get("Vary"), "Accept-Encoding") {
+		t.Fatalf("plain asset = %d headers=%v", plain.Code, plain.Header())
+	}
+
+	direct := perform(handler, http.MethodGet, requestPath+".gz", "", nil, "")
+	if direct.Code != http.StatusNotFound {
+		t.Fatalf("direct precompressed asset = %d, want 404", direct.Code)
+	}
+}
+
+func TestAcceptsEncoding(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		header string
+		want   bool
+	}{
+		{"gzip", true},
+		{"br, GZip; q=0.5", true},
+		{"*;q=1", true},
+		{"gzip;q=0, *;q=1", false},
+		{"br", false},
+		{"gzip;q=2", false},
+	}
+	for _, test := range tests {
+		if got := acceptsEncoding(test.header, "gzip"); got != test.want {
+			t.Errorf("acceptsEncoding(%q) = %t, want %t", test.header, got, test.want)
+		}
 	}
 }
 
