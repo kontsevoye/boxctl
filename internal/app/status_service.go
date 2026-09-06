@@ -14,17 +14,22 @@ import (
 )
 
 type StatusService struct {
-	Lifecycle *Lifecycle
-	Profiles  state.ProfileStore
-	Control   engine.Control
-	Host      *EngineHost
-	Revisions *ProfileRevisionStore
-	Switcher  *ProfileSwitcher
-	StartedAt time.Time
+	Lifecycle      *Lifecycle
+	Profiles       state.ProfileStore
+	Control        engine.Control
+	Host           *EngineHost
+	Revisions      *ProfileRevisionStore
+	Switcher       *ProfileSwitcher
+	StartedAt      time.Time
+	ManagerUpdates ManagerUpdateStatusProvider
 
 	ReadProcessResources func(int) (processResourceSnapshot, error)
 	resourcesMu          sync.Mutex
 	resourceSamples      map[int]processResourcePrevious
+}
+
+type ManagerUpdateStatusProvider interface {
+	ManagerUpdateStatus() web.ManagerUpdateStatus
 }
 
 func (service *StatusService) Status(ctx context.Context) (web.StatusSnapshot, error) {
@@ -66,6 +71,10 @@ func (service *StatusService) Status(ctx context.Context) (web.StatusSnapshot, e
 		},
 		SelectedEngine: selectedEngine,
 		RunningEngine:  runningEngine,
+	}
+	if service.ManagerUpdates != nil {
+		managerUpdate := service.ManagerUpdates.ManagerUpdateStatus()
+		result.ManagerUpdate = &managerUpdate
 	}
 	if service.Host != nil {
 		result.RuntimeEpoch = service.Host.RuntimeEpoch()

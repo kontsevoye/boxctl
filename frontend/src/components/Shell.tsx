@@ -132,7 +132,7 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
     }
   }
 
-  return <BoxctlVersionProvider version={status.data?.version}><div className="du-drawer app-shell">
+  return <BoxctlVersionProvider version={status.data?.version} managerUpdate={status.data?.managerUpdate}><div className="du-drawer app-shell">
     <AmbientBackdrop />
     <input id="app-navigation" type="checkbox" className="du-drawer-toggle" checked={drawerOpen} aria-hidden="true" tabIndex={-1} onChange={(event) => setDrawerOpen(event.currentTarget.checked)} />
     <section className="du-drawer-content workspace" inert={drawerOpen ? true : undefined}>

@@ -7,7 +7,12 @@ import (
 
 	"github.com/kontsevoye/boxctl/internal/engine"
 	"github.com/kontsevoye/boxctl/internal/state"
+	"github.com/kontsevoye/boxctl/internal/web"
 )
+
+type managerUpdateStatusStub struct{ status web.ManagerUpdateStatus }
+
+func (stub managerUpdateStatusStub) ManagerUpdateStatus() web.ManagerUpdateStatus { return stub.status }
 
 func TestStatusServiceUsesLifecycleAndActiveProfile(t *testing.T) {
 	profiles, err := state.NewProfileStore(t.TempDir())
@@ -59,5 +64,25 @@ func TestStatusServiceOmitsCoreUptimeWhileStopped(t *testing.T) {
 	}
 	if status.CoreUptimeSeconds != 0 {
 		t.Fatalf("core uptime = %d while stopped", status.CoreUptimeSeconds)
+	}
+}
+
+func TestStatusServiceIncludesNonBlockingManagerUpdateSnapshot(t *testing.T) {
+	profiles, err := state.NewProfileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &StatusService{
+		Lifecycle: &Lifecycle{}, Profiles: profiles,
+		ManagerUpdates: managerUpdateStatusStub{status: web.ManagerUpdateStatus{
+			CurrentVersion: "2026.09.3", LatestVersion: "2026.09.4", UpdateAvailable: true,
+		}},
+	}
+	status, err := service.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ManagerUpdate == nil || !status.ManagerUpdate.UpdateAvailable || status.ManagerUpdate.LatestVersion != "2026.09.4" {
+		t.Fatalf("manager update = %+v", status.ManagerUpdate)
 	}
 }

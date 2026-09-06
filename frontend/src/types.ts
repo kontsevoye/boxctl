@@ -53,6 +53,15 @@ export interface ProcessStats {
   cpuPercent?: number
 }
 
+export interface ManagerUpdateStatus {
+  currentVersion?: string
+  latestVersion?: string
+  updateAvailable: boolean
+  releaseUrl?: string
+  checkedAt?: string
+  checkFailed?: boolean
+}
+
 export interface StatusSnapshot {
   healthy: boolean
   version?: string
@@ -63,6 +72,8 @@ export interface StatusSnapshot {
   selectedEngine?: EngineID
   runningEngine?: EngineID
   runtimeEpoch?: number
+  /** Optional so the UI remains compatible with managers predating release checks. */
+  managerUpdate?: ManagerUpdateStatus
   restartRequired?: boolean
   pendingChanges?: string[]
   transition?: string

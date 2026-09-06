@@ -1167,10 +1167,19 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	if err != nil {
 		return nil, err
 	}
+	var managerUpdates *ManagerReleaseChecker
+	if _, versionErr := updatepkg.CompareBoxctlCalVer(buildinfo.Version, buildinfo.Version); versionErr == nil {
+		managerUpdateClient := &http.Client{Timeout: defaultManagerReleaseCheckTimeout}
+		managerUpdates = NewManagerReleaseChecker(
+			buildinfo.Version,
+			updatepkg.NewBoxctlSource(managerUpdateClient, defaultManagerRepository),
+			logger,
+		)
+	}
 
 	services := web.Services{Credentials: credentials, Status: &StatusService{
 		Lifecycle: lifecycle, Profiles: mihomoPreparer.Profiles, Control: host, Host: host,
-		Revisions: profilesService.Revisions, Switcher: switcher, StartedAt: time.Now().UTC(),
+		Revisions: profilesService.Revisions, Switcher: switcher, StartedAt: time.Now().UTC(), ManagerUpdates: managerUpdates,
 	}}
 	services.Engines = &EngineCatalogService{
 		Layout: layout, Profiles: mihomoPreparer.Profiles, Lifecycle: lifecycle, Host: host,
@@ -1360,6 +1369,9 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		automaticUpdateContext, cancelAutomaticUpdates := context.WithCancel(ctx)
 		stopAutomaticUpdates = cancelAutomaticUpdates
 		go automaticUpdates.Run(automaticUpdateContext)
+	}
+	if managerUpdates != nil {
+		go managerUpdates.Run(ctx)
 	}
 	hostOwned = false
 	return &serveRuntime{Handler: handler, Lifecycle: lifecycle, HandoffMarkerPending: handoffAdopted, Close: func() error {

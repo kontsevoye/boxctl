@@ -91,21 +91,33 @@ type CoreHealth struct {
 
 // StatusSnapshot is the dashboard status model.
 type StatusSnapshot struct {
-	Healthy             bool           `json:"healthy"`
-	Version             string         `json:"version,omitempty"`
-	BoxctlUptimeSeconds int64          `json:"boxctlUptimeSeconds,omitempty"`
-	CoreUptimeSeconds   int64          `json:"coreUptimeSeconds,omitempty"`
-	Core                CoreHealth     `json:"core"`
-	ActiveProfile       *ProfileRef    `json:"activeProfile,omitempty"`
-	SelectedEngine      string         `json:"selectedEngine,omitempty"`
-	RunningEngine       string         `json:"runningEngine,omitempty"`
-	RuntimeEpoch        uint64         `json:"runtimeEpoch,omitempty"`
-	RestartRequired     bool           `json:"restartRequired,omitempty"`
-	PendingChanges      []string       `json:"pendingChanges,omitempty"`
-	Transition          string         `json:"transition,omitempty"`
-	Traffic             *TrafficStats  `json:"traffic,omitempty"`
-	Resources           *ResourceStats `json:"resources,omitempty"`
-	Warnings            []Notice       `json:"warnings,omitempty"`
+	Healthy             bool                 `json:"healthy"`
+	Version             string               `json:"version,omitempty"`
+	BoxctlUptimeSeconds int64                `json:"boxctlUptimeSeconds,omitempty"`
+	CoreUptimeSeconds   int64                `json:"coreUptimeSeconds,omitempty"`
+	Core                CoreHealth           `json:"core"`
+	ActiveProfile       *ProfileRef          `json:"activeProfile,omitempty"`
+	SelectedEngine      string               `json:"selectedEngine,omitempty"`
+	RunningEngine       string               `json:"runningEngine,omitempty"`
+	RuntimeEpoch        uint64               `json:"runtimeEpoch,omitempty"`
+	RestartRequired     bool                 `json:"restartRequired,omitempty"`
+	PendingChanges      []string             `json:"pendingChanges,omitempty"`
+	Transition          string               `json:"transition,omitempty"`
+	Traffic             *TrafficStats        `json:"traffic,omitempty"`
+	Resources           *ResourceStats       `json:"resources,omitempty"`
+	Warnings            []Notice             `json:"warnings,omitempty"`
+	ManagerUpdate       *ManagerUpdateStatus `json:"managerUpdate,omitempty"`
+}
+
+// ManagerUpdateStatus is populated asynchronously and never makes /status
+// depend on GitHub availability.
+type ManagerUpdateStatus struct {
+	CurrentVersion  string     `json:"currentVersion,omitempty"`
+	LatestVersion   string     `json:"latestVersion,omitempty"`
+	UpdateAvailable bool       `json:"updateAvailable"`
+	ReleaseURL      string     `json:"releaseUrl,omitempty"`
+	CheckedAt       *time.Time `json:"checkedAt,omitempty"`
+	CheckFailed     bool       `json:"checkFailed,omitempty"`
 }
 
 type ProfileRef struct {
