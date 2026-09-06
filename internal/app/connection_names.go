@@ -220,7 +220,7 @@ func (resolver *localConnectionNameResolver) Resolve(ctx context.Context, source
 			case resolver.ptrSlots <- struct{}{}:
 				flight = &connectionNameInflight{done: make(chan struct{})}
 				resolver.ptrInflight[addr] = flight
-				go resolver.runPTRLookup(addr, nameServers, flight)
+				go resolver.runPTRLookup(context.WithoutCancel(ctx), addr, nameServers, flight)
 			default:
 				// Other authenticated streams already own all global PTR slots.
 			}
@@ -245,8 +245,8 @@ func (resolver *localConnectionNameResolver) Resolve(ctx context.Context, source
 	return result
 }
 
-func (resolver *localConnectionNameResolver) runPTRLookup(addr netip.Addr, nameServers []netip.Addr, flight *connectionNameInflight) {
-	lookupContext, cancel := context.WithTimeout(context.Background(), resolver.ptrTimeout)
+func (resolver *localConnectionNameResolver) runPTRLookup(parent context.Context, addr netip.Addr, nameServers []netip.Addr, flight *connectionNameInflight) {
+	lookupContext, cancel := context.WithTimeout(parent, resolver.ptrTimeout)
 	name := safeConnectionHostname(resolver.lookupPTR(lookupContext, addr, nameServers))
 	cancel()
 
