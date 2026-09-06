@@ -93,7 +93,7 @@ export function ConnectionsPage() {
     .filter((connection) => {
       if (typeFilter !== 'all' && connectionType(connection) !== typeFilter) return false
       if (!needle) return true
-      const haystack = [displayConnectionHost(connection), connection.destination, connection.source, connection.sourceIP, connection.destinationIP, connection.dnsMode, connection.rule, connection.rulePayload, ...(connection.chains ?? [])].filter(Boolean).join(' ')
+      const haystack = [displayConnectionHost(connection), connection.destination, connection.source, connection.sourceIP, connection.sourceHostname, connection.destinationIP, connection.dnsMode, connection.rule, connection.rulePayload, ...(connection.chains ?? [])].filter(Boolean).join(' ')
       return pattern ? pattern.test(haystack) : haystack.toLocaleLowerCase().includes(needle)
     })
     .sort((left, right) => compareConnections(left, right, sortKey) * (descending ? -1 : 1))
@@ -160,7 +160,7 @@ export function ConnectionsPage() {
           return <tbody key={connection.id}>
             <tr className={canCloseOne && tab === 'active' ? 'connections-card-row has-close-action' : 'connections-card-row'}>
               <td className="connections-expand"><button onClick={() => setExpanded(isExpanded ? '' : connection.id)} title={t('details')} aria-label={t('details')}>{isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button></td>
-              <td className="connections-host"><strong>{displayConnectionHost(connection)}</strong>{connection.host && connection.destination && displayConnectionHost(connection) !== connection.destination && <small>{connection.destination}</small>}{connection.source && <small>{t('sourceAddress')}: {connection.source}</small>}</td>
+              <td className="connections-host"><strong>{displayConnectionHost(connection)}</strong>{connection.host && connection.destination && displayConnectionHost(connection) !== connection.destination && <small>{connection.destination}</small>}{(connection.source || connection.sourceIP || connection.sourceHostname) && <small>{t('sourceAddress')}: {displayConnectionSource(connection)}</small>}</td>
               <td data-label={t('connectionType')}><strong>{connectionType(connection)}</strong>{connection.dnsMode && <small>{connection.dnsMode}</small>}</td>
               <td className="connections-rule" data-label={t('matchedRule')}><strong>{connection.rule ?? '—'}</strong>{connection.rulePayload && <small>{connection.rulePayload}</small>}</td>
               <td data-label={t('chains')}><div className="connections-chain">{chains.length ? chains.map((chain, index) => <span key={`${connection.id}-${index}`}>{index > 0 && <b aria-hidden="true">→</b>}<code>{chain}</code></span>) : '—'}</div></td>
@@ -168,7 +168,7 @@ export function ConnectionsPage() {
               {canCloseOne && tab === 'active' && <td className="connections-action"><button className="connections-close-one" disabled={busy !== ''} onClick={() => close(connection)} title={t('close')} aria-label={t('close')}><X size={16} aria-hidden="true" /></button></td>}
             </tr>
             {isExpanded && <tr className="connections-details-row"><td colSpan={canCloseOne && tab === 'active' ? 10 : 9}><dl>
-              <div><dt>ID</dt><dd><code>{connection.id}</code></dd></div><div><dt>{t('sourceAddress')}</dt><dd>{displayConnectionEndpoint(connection.sourceIP, connection.sourcePort, connection.source)}</dd></div><div><dt>{t('destination')}</dt><dd>{displayConnectionEndpoint(connection.destinationIP, connection.destinationPort, connection.destination)}</dd></div><div><dt>{t('dnsMode')}</dt><dd>{connection.dnsMode ?? '—'}</dd></div><div><dt>{t('started')}</dt><dd>{formatTimestamp(connection.startedAt, locale)}</dd></div>{connection.closedAt && <div><dt>{t('closedAt')}</dt><dd>{formatTimestamp(connection.closedAt, locale)}</dd></div>}
+              <div><dt>ID</dt><dd><code>{connection.id}</code></dd></div><div><dt>{t('sourceAddress')}</dt><dd>{displayConnectionSource(connection)}</dd></div><div><dt>{t('destination')}</dt><dd>{displayConnectionEndpoint(connection.destinationIP, connection.destinationPort, connection.destination)}</dd></div><div><dt>{t('dnsMode')}</dt><dd>{connection.dnsMode ?? '—'}</dd></div><div><dt>{t('started')}</dt><dd>{formatTimestamp(connection.startedAt, locale)}</dd></div>{connection.closedAt && <div><dt>{t('closedAt')}</dt><dd>{formatTimestamp(connection.closedAt, locale)}</dd></div>}
             </dl></td></tr>}
           </tbody>
         })}
@@ -197,7 +197,7 @@ function validConnection(item: unknown): item is Connection {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return false
   const connection = item as Record<string, unknown>
   if (typeof connection.id !== 'string') return false
-  for (const key of ['network', 'type', 'source', 'destination', 'host', 'rule', 'rulePayload', 'outbound', 'startedAt', 'closedAt', 'dnsMode', 'sourceIP', 'sourcePort', 'destinationIP', 'destinationPort']) {
+  for (const key of ['network', 'type', 'source', 'destination', 'host', 'rule', 'rulePayload', 'outbound', 'startedAt', 'closedAt', 'dnsMode', 'sourceIP', 'sourceHostname', 'sourcePort', 'destinationIP', 'destinationPort']) {
     if (connection[key] !== undefined && typeof connection[key] !== 'string') return false
   }
   for (const key of ['uploadBytes', 'downloadBytes', 'uploadRateBytes', 'downloadRateBytes']) {
@@ -225,6 +225,15 @@ export function displayConnectionEndpoint(host?: string, port?: string, fallback
   const value = host?.trim() || fallback?.trim()
   if (!value) return '—'
   return endpointWithPort(value, port)
+}
+
+export function displayConnectionSource(connection: Pick<Connection, 'source' | 'sourceIP' | 'sourceHostname' | 'sourcePort'>): string {
+  const hostname = connection.sourceHostname?.trim()
+  if (!hostname) return displayConnectionEndpoint(connection.sourceIP, connection.sourcePort, connection.source)
+  const address = connection.sourceIP?.trim()
+  if (!address) return connection.source?.trim() || hostname
+  const literal = address.includes(':') && !(address.startsWith('[') && address.endsWith(']')) ? `[${address}]` : address
+  return `${hostname} (${literal})${connection.sourcePort ? `:${connection.sourcePort}` : ''}`
 }
 
 export function mergeConnectionSnapshots(previous: ConnectionStreamSnapshot, next: ConnectionStreamSnapshot): ConnectionStreamSnapshot {

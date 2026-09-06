@@ -50,8 +50,19 @@ and fake-IP list generation explicitly Mihomo-only instead of presenting
 operations that cannot affect a sing-box runtime. Native
 sing-box `outbounds` and `route.rule_set` remain editable in its JSON profile;
 the integrated proxies, rules, connections, traffic, and log pages use its
-loopback Clash API adapter. Remote sing-box profile refreshes are staged as
-pending changes and never restart the core in the background.
+loopback Clash API adapter. The optional Zashboard proxy follows the running
+engine and is available for both Mihomo and sing-box, but sing-box dashboard
+panels that depend on providers, hot reload, or mutable routing mode remain
+unsupported. Remote sing-box profile refreshes are staged as pending changes
+and never restart the core in the background.
+
+Connections enrich private LAN source addresses from OpenWrt/Entware host and
+lease data (`/etc/hosts`, `/opt/etc/hosts`, `/tmp/hosts/*`, and
+`/tmp/dhcp.leases`). Missing private addresses receive a bounded, cached PTR
+lookup through WAN resolver files such as
+`/tmp/resolv.conf.d/resolv.conf.auto`; loopback and addresses owned by the
+boxctl host are skipped to avoid querying the managed local DNS path. The raw
+source IP remains present in the API and UI alongside the resolved name.
 
 OpenWrt DNS `upstream` mode requires the native sing-box profile to define an
 independent `dns.servers` chain. Implicit or explicit `local`/`resolved`

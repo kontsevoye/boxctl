@@ -330,6 +330,7 @@ export interface Connection {
   closedAt?: string
   dnsMode?: string
   sourceIP?: string
+  sourceHostname?: string
   sourcePort?: string
   destinationIP?: string
   destinationPort?: string

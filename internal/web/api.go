@@ -714,6 +714,7 @@ type Connection struct {
 	Network           string     `json:"network,omitempty"`
 	Type              string     `json:"type,omitempty"`
 	Source            string     `json:"source,omitempty"`
+	SourceHostname    string     `json:"sourceHostname,omitempty"`
 	Destination       string     `json:"destination,omitempty"`
 	Host              string     `json:"host,omitempty"`
 	Rule              string     `json:"rule,omitempty"`

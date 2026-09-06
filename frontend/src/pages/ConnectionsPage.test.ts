@@ -3,6 +3,7 @@ import {
   displayConnectionChains,
   displayConnectionEndpoint,
   displayConnectionHost,
+  displayConnectionSource,
   mergeConnectionSnapshots,
   nextConnectionSort,
   parseConnectionsEvent,
@@ -45,6 +46,7 @@ describe('Connections stream payload', () => {
     expect(() => parseConnectionsEvent('{}')).toThrow('Invalid connection stream payload')
     expect(() => parseConnectionsEvent('{"active":[{"host":"missing-id"}]}')).toThrow('Invalid connection stream payload')
     expect(() => parseConnectionsEvent(JSON.stringify({ ...emptySnapshot(), active: [{ id: 'bad-host', host: 42 }] }))).toThrow('Invalid connection stream payload')
+    expect(() => parseConnectionsEvent(JSON.stringify({ ...emptySnapshot(), active: [{ id: 'bad-source-hostname', sourceHostname: 42 }] }))).toThrow('Invalid connection stream payload')
     expect(() => parseConnectionsEvent(JSON.stringify({ ...emptySnapshot(), active: [{ id: 'bad-chain', chains: ['DIRECT', 42] }] }))).toThrow('Invalid connection stream payload')
     expect(() => parseConnectionsEvent(JSON.stringify({ ...emptySnapshot(), downloadTotalBytes: 'many' }))).toThrow('Invalid connection stream payload')
   })
@@ -54,6 +56,9 @@ describe('Connections stream payload', () => {
     expect(displayConnectionHost({ id: 'already', host: 'example.test:8443', destinationPort: '8443' })).toBe('example.test:8443')
     expect(displayConnectionHost({ id: 'ipv6', host: '2001:db8::1', destinationPort: '443' })).toBe('[2001:db8::1]:443')
     expect(displayConnectionEndpoint(undefined, '443', '198.51.100.7:443')).toBe('198.51.100.7:443')
+    expect(displayConnectionSource({ sourceHostname: 'phone.lan', sourceIP: '192.168.69.42', sourcePort: '53120' })).toBe('phone.lan (192.168.69.42):53120')
+    expect(displayConnectionSource({ sourceHostname: 'nas.lan', sourceIP: 'fd00::42', sourcePort: '443' })).toBe('nas.lan ([fd00::42]):443')
+    expect(displayConnectionSource({ source: '192.168.69.42:53120' })).toBe('192.168.69.42:53120')
   })
 
   it('retains bounded closed history across an automatic EventSource reconnect', () => {

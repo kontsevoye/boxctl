@@ -1289,7 +1289,8 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	if !options.NoCore {
 		coreService, err = NewCoreService(lifecycle, enginePreparer, host, CoreServiceOptions{
 			CoreName: "core", UnsafeExternalDashboard: options.UnsafeExternalDashboard,
-			SelectedEngine: func() string { return selectedProfileEngine(mihomoPreparer.Profiles) },
+			SelectedEngine:  func() string { return selectedProfileEngine(mihomoPreparer.Profiles) },
+			ConnectionNames: newConnectionNameResolver(connectionNameResolverOptions{}),
 		})
 		if err != nil {
 			return nil, err

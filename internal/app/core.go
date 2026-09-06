@@ -44,6 +44,7 @@ type CoreBackend interface {
 type CoreServiceOptions struct {
 	CoreName                string
 	SelectedEngine          func() string
+	ConnectionNames         ConnectionNameResolver
 	LogHistory              int
 	MaxLogMessageBytes      int
 	UnsafeExternalDashboard bool
@@ -57,6 +58,7 @@ type CoreService struct {
 	lifecycle               *Lifecycle
 	coreName                string
 	selectedEngine          func() string
+	connectionNames         ConnectionNameResolver
 	logs                    *eventlog.Ring
 	history                 int
 	maxMessage              int
@@ -112,6 +114,7 @@ func NewCoreService(lifecycle *Lifecycle, preparer ActivePreparer, core CoreBack
 		lifecycle:               lifecycle,
 		coreName:                strings.TrimSpace(options.CoreName),
 		selectedEngine:          options.SelectedEngine,
+		connectionNames:         options.ConnectionNames,
 		logs:                    eventlog.New(history),
 		history:                 history,
 		maxMessage:              maxMessage,
@@ -694,7 +697,7 @@ func (service *CoreService) Connections(ctx context.Context) ([]web.Connection, 
 	if err != nil {
 		return nil, translateCoreError(err)
 	}
-	return webConnections(snapshot, nil, 0), nil
+	return webConnections(snapshot, nil, 0, service.resolveConnectionNames(ctx, snapshot)), nil
 }
 
 // StreamConnections translates consecutive native snapshots into a stable web
@@ -737,7 +740,7 @@ func (service *CoreService) StreamConnections(ctx context.Context) (<-chan web.C
 				if !previousAt.IsZero() {
 					elapsed = capturedAt.Sub(previousAt)
 				}
-				connections := webConnections(snapshot, previous, elapsed)
+				connections := webConnections(snapshot, previous, elapsed, service.resolveConnectionNames(ctx, snapshot))
 				currentConnections := make(map[string]web.Connection, len(connections))
 				for _, connection := range connections {
 					currentConnections[connection.ID] = connection
@@ -779,7 +782,20 @@ type connectionCounters struct {
 	download int64
 }
 
-func webConnections(snapshot engine.ConnectionsSnapshot, previous map[string]connectionCounters, elapsed time.Duration) []web.Connection {
+func (service *CoreService) resolveConnectionNames(ctx context.Context, snapshot engine.ConnectionsSnapshot) map[string]string {
+	if service.connectionNames == nil || len(snapshot.Connections) == 0 {
+		return nil
+	}
+	addresses := make([]string, 0, len(snapshot.Connections))
+	for _, connection := range snapshot.Connections {
+		if connection.Metadata.SourceIP != "" {
+			addresses = append(addresses, connection.Metadata.SourceIP)
+		}
+	}
+	return service.connectionNames.Resolve(ctx, addresses)
+}
+
+func webConnections(snapshot engine.ConnectionsSnapshot, previous map[string]connectionCounters, elapsed time.Duration, sourceNames map[string]string) []web.Connection {
 	result := make([]web.Connection, 0, len(snapshot.Connections))
 	for _, connection := range snapshot.Connections {
 		outbound := ""
@@ -787,11 +803,13 @@ func webConnections(snapshot engine.ConnectionsSnapshot, previous map[string]con
 			outbound = connection.Chains[0]
 		}
 		old, found := previous[connection.ID]
+		sourceName := sourceNames[connection.Metadata.SourceIP]
 		result = append(result, web.Connection{
 			ID:                connection.ID,
 			Network:           connection.Metadata.Network,
 			Type:              connection.Metadata.Type,
 			Source:            joinCoreEndpoint(connection.Metadata.SourceIP, connection.Metadata.SourcePort),
+			SourceHostname:    sourceName,
 			Destination:       joinCoreEndpoint(connection.Metadata.DestinationIP, connection.Metadata.DestinationPort),
 			Host:              connection.Metadata.Host,
 			Rule:              connection.Rule,
