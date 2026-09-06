@@ -317,6 +317,9 @@ func (service *ProfilesService) ActivateProfile(ctx context.Context, id string) 
 }
 
 func (service *ProfilesService) ActivateProfileWithRequest(ctx context.Context, id string, request web.ProfileActivationRequest) (web.Profile, error) {
+	if request.ConfirmRestart {
+		ctx = panelRestart(ctx, "profile-switch")
+	}
 	service.mutationMu.Lock()
 	defer service.mutationMu.Unlock()
 

@@ -454,6 +454,15 @@ func (s *externalProcessSupervisor) Adopt(ctx context.Context) (PreparedCore, er
 	if err := s.validatePrepared(prepared); err != nil {
 		return PreparedCore{}, err
 	}
+	// A manager and core can both die before either removes the private process
+	// record. With a verified owned runtime and a PID that no longer exists,
+	// discard that generation even on management-only startup. A live/reused PID,
+	// unreadable /proc entry or invalid runtime is never sufficient for deletion.
+	if _, err := captureProcessIdentity(persisted.PID); errors.Is(err, os.ErrNotExist) {
+		s.removeProcessState()
+		s.cleanupPrepared(prepared)
+		return PreparedCore{}, os.ErrNotExist
+	}
 	if legacy {
 		if err := validatePersistedProcess(persisted.PID, persisted.Identity, prepared.BinaryPath, legacyArgs); err != nil {
 			return PreparedCore{}, err

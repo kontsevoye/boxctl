@@ -106,7 +106,19 @@ type StatusSnapshot struct {
 	Traffic             *TrafficStats        `json:"traffic,omitempty"`
 	Resources           *ResourceStats       `json:"resources,omitempty"`
 	Warnings            []Notice             `json:"warnings,omitempty"`
+	RestartGuard        *RestartGuardStatus  `json:"restartGuard,omitempty"`
 	ManagerUpdate       *ManagerUpdateStatus `json:"managerUpdate,omitempty"`
+}
+
+// RestartGuardStatus describes the temporary LAN forwarding block separately
+// from core health, so a cleanup error never stops a healthy core.
+type RestartGuardStatus struct {
+	Active              bool       `json:"active"`
+	Reason              string     `json:"reason,omitempty"`
+	ExpiresAt           *time.Time `json:"expiresAt,omitempty"`
+	ProtectedInterfaces []string   `json:"protectedInterfaces,omitempty"`
+	TrustedInterfaces   []string   `json:"trustedInterfaces,omitempty"`
+	LastError           string     `json:"lastError,omitempty"`
 }
 
 // ManagerUpdateStatus is populated asynchronously and never makes /status
@@ -187,6 +199,8 @@ type StatusService interface {
 // Settings is intentionally a public allow-list. Credentials, API secrets,
 // subscription URLs, and engine configuration must not be added to this DTO.
 type Settings struct {
+	CoreRestartGuard                     bool              `json:"coreRestartGuard"`
+	CoreRestartGuardSupported            bool              `json:"coreRestartGuardSupported"`
 	Language                             string            `json:"language"`
 	Theme                                string            `json:"theme"`
 	LogLevel                             string            `json:"logLevel"`
@@ -236,6 +250,7 @@ type InterfaceCatalog struct {
 
 // SettingsPatch uses pointers so omitted values are distinguishable from zero values.
 type SettingsPatch struct {
+	CoreRestartGuard                     *bool     `json:"coreRestartGuard,omitempty"`
 	Language                             *string   `json:"language,omitempty"`
 	Theme                                *string   `json:"theme,omitempty"`
 	LogLevel                             *string   `json:"logLevel,omitempty"`
@@ -804,6 +819,11 @@ type SystemLogService interface {
 	StreamSystemLogs(ctx context.Context, query LogQuery) (<-chan LogEntry, error)
 }
 
+// FirewallService provides explicit recovery of owned gateway state.
+type FirewallService interface {
+	CleanupFirewall(ctx context.Context) error
+}
+
 // LifecycleService controls the selected engine without exposing its native API.
 type LifecycleService interface {
 	Start(ctx context.Context) error
@@ -831,5 +851,6 @@ type Services struct {
 	ExternalDashboardHTTP http.Handler
 	Core                  CoreService
 	Lifecycle             LifecycleService
+	Firewall              FirewallService
 	SystemLogs            SystemLogService
 }

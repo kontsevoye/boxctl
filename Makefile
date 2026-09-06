@@ -24,6 +24,7 @@ POSIX_SHELL_SCRIPTS := \
 	scripts/test-release-notes.sh \
 	scripts/validate-calver.sh \
 	tests/integration/guest/run.sh \
+	tests/integration/guest/restart-guard.sh \
 	tests/integration/guest/parity-mihomo.sh \
 	tests/integration/guest/parity-singbox.sh \
 	tests/integration/guest/singbox-traffic.sh \

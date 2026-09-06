@@ -40,7 +40,7 @@ export function canShowNavigationItem(capabilities: Capabilities, item: NavItem)
 
 export function coreControlAvailability(state: string) {
   return {
-    running: state === 'running',
+    running: state === 'running' || state === 'running-guarded',
     start: state === 'stopped' || state === 'failed',
   }
 }

@@ -86,7 +86,11 @@ func (manager *EndpointBypassManager) PrepareMihomo(ctx context.Context, source 
 	if err != nil {
 		return nil, err
 	}
-	return manager.prepareHosts(ctx, hosts, persist)
+	fakeIPRanges, err := endpointFakeIPRanges(source, false)
+	if err != nil {
+		return nil, err
+	}
+	return manager.prepareHosts(ctx, hosts, persist, fakeIPRanges)
 }
 
 // PrepareSingBox extracts network endpoints from a normalized sing-box JSON
@@ -101,10 +105,14 @@ func (manager *EndpointBypassManager) PrepareSingBox(ctx context.Context, source
 	if err != nil {
 		return nil, err
 	}
-	return manager.prepareHosts(ctx, hosts, persist)
+	fakeIPRanges, err := endpointFakeIPRanges(source, true)
+	if err != nil {
+		return nil, err
+	}
+	return manager.prepareHosts(ctx, hosts, persist, fakeIPRanges)
 }
 
-func (manager *EndpointBypassManager) prepareHosts(ctx context.Context, hosts []string, persist bool) ([]netip.Prefix, error) {
+func (manager *EndpointBypassManager) prepareHosts(ctx context.Context, hosts []string, persist bool, fakeIPRanges []netip.Prefix) ([]netip.Prefix, error) {
 	cache, err := manager.loadCache()
 	if err != nil {
 		return nil, fmt.Errorf("read endpoint bypass cache: %w", err)
@@ -119,8 +127,9 @@ func (manager *EndpointBypassManager) prepareHosts(ctx context.Context, hosts []
 	for _, host := range hosts {
 		key := endpointHostKey(host)
 		addresses, lookupErr := manager.resolveHost(ctx, host)
+		addresses = filterEndpointAddresses(addresses, fakeIPRanges)
 		if lookupErr != nil || len(addresses) == 0 {
-			addresses = cachedEndpointAddresses(cache.Hosts[key])
+			addresses = filterEndpointAddresses(cachedEndpointAddresses(cache.Hosts[key]), fakeIPRanges)
 		}
 		if len(addresses) == 0 {
 			continue
@@ -150,6 +159,62 @@ func (manager *EndpointBypassManager) prepareHosts(ctx context.Context, hosts []
 		}
 	}
 	return normalizeNetPrefixes(result), nil
+}
+
+// The system resolver may already point at the running core's fake-IP DNS.
+// These synthetic destinations must stay captured: putting them in the endpoint
+// bypass set would send clients directly toward an unroutable address. Filter
+// both fresh answers and old cache entries, retaining real per-host LKG answers.
+func filterEndpointAddresses(addresses []netip.Addr, fakeIPRanges []netip.Prefix) []netip.Addr {
+	return slices.DeleteFunc(addresses, func(address netip.Addr) bool {
+		return slices.ContainsFunc(fakeIPRanges, func(prefix netip.Prefix) bool {
+			return prefix.Contains(address.Unmap())
+		})
+	})
+}
+
+func endpointFakeIPRanges(source []byte, singBox bool) ([]netip.Prefix, error) {
+	ranges := []netip.Prefix{netip.MustParsePrefix("198.18.0.0/15")}
+	var configured []string
+	if singBox {
+		var document struct {
+			DNS struct {
+				Servers []struct {
+					Type  string `json:"type"`
+					Range string `json:"inet4_range"`
+				} `json:"servers"`
+			} `json:"dns"`
+		}
+		if err := json.Unmarshal(source, &document); err != nil {
+			return nil, errors.New("inspect sing-box fake-IP ranges")
+		}
+		for _, server := range document.DNS.Servers {
+			if server.Type == "fakeip" {
+				configured = append(configured, server.Range)
+			}
+		}
+	} else {
+		var document struct {
+			DNS struct {
+				Range string `yaml:"fake-ip-range"`
+			} `yaml:"dns"`
+		}
+		if err := yaml.Unmarshal(source, &document); err != nil {
+			return nil, errors.New("inspect Mihomo fake-IP ranges")
+		}
+		configured = append(configured, document.DNS.Range)
+	}
+	for _, value := range configured {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
+		if err != nil || !prefix.Addr().Is4() {
+			return nil, errors.New("invalid IPv4 fake-IP range in endpoint configuration")
+		}
+		ranges = append(ranges, prefix.Masked())
+	}
+	return ranges, nil
 }
 
 func (manager *EndpointBypassManager) singBoxEndpointHosts(source []byte) ([]string, error) {

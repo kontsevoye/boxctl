@@ -1046,6 +1046,7 @@ func TestProxySubscriptionCRUDIsCSRFProtectedAndWriteOnly(t *testing.T) {
 
 func TestAdvancedSettingsPatchPreservesTypedFields(t *testing.T) {
 	settings := &fakeSettingsService{settings: Settings{
+		CoreRestartGuard:                     true,
 		Language:                             "ru",
 		Theme:                                "system",
 		DNSMode:                              "redirect",
@@ -1076,6 +1077,7 @@ func TestAdvancedSettingsPatchPreservesTypedFields(t *testing.T) {
 	cookie, csrf := login(t, handler)
 
 	response := perform(handler, http.MethodPut, "/api/v1/settings", `{
+		"coreRestartGuard":false,
 		"dnsMode":"disabled",
 		"interfaceMode":"exclude",
 		"autoDetectWAN":false,
@@ -1099,12 +1101,13 @@ func TestAdvancedSettingsPatchPreservesTypedFields(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("settings update = %d %s", response.Code, response.Body.String())
 	}
-	for _, field := range []string{`"autoDetectWAN":true`, `"autoDetectLAN":false`, `"interceptRouterOutput":true`, `"autoFakeIPIncludeExternalIPProviders":true`} {
+	for _, field := range []string{`"coreRestartGuard":true`, `"autoDetectWAN":true`, `"autoDetectLAN":false`, `"interceptRouterOutput":true`, `"autoFakeIPIncludeExternalIPProviders":true`} {
 		if !strings.Contains(response.Body.String(), field) {
 			t.Fatalf("settings response is missing %s: %s", field, response.Body.String())
 		}
 	}
 	patch := settings.patch
+	assertBoolPointer(t, "coreRestartGuard", patch.CoreRestartGuard, false)
 	assertStringPointer(t, "dnsMode", patch.DNSMode, "disabled")
 	assertStringPointer(t, "interfaceMode", patch.InterfaceMode, "exclude")
 	assertBoolPointer(t, "autoDetectWAN", patch.AutoDetectWAN, false)

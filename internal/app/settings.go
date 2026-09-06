@@ -26,6 +26,7 @@ const defaultMihomoFakeIPRange = "198.18.0.0/15"
 type RuntimeSettings struct {
 	Raw state.Settings
 
+	CoreRestartGuard                     bool
 	OperatingMode                        string
 	CaptureMode                          openwrt.Mode
 	DNSMode                              openwrt.DNSMode
@@ -185,6 +186,7 @@ func DecodeRuntimeSettings(raw state.Settings) (RuntimeSettings, error) {
 	}
 
 	for key, target := range map[string]*bool{
+		"CORE_RESTART_GUARD":    &result.CoreRestartGuard,
 		"BLOCK_QUIC":            &result.RejectQUIC,
 		"AUTO_DETECT_WAN":       &result.AutoDetectWAN,
 		"AUTO_DETECT_LAN":       &result.AutoDetectLAN,

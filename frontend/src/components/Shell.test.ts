@@ -36,6 +36,7 @@ describe('coreControlAvailability', () => {
     expect(coreControlAvailability('stopped')).toEqual({ running: false, start: true })
     expect(coreControlAvailability('failed')).toEqual({ running: false, start: true })
     expect(coreControlAvailability('running')).toEqual({ running: true, start: false })
+    expect(coreControlAvailability('running-guarded')).toEqual({ running: true, start: false })
     expect(coreControlAvailability('starting')).toEqual({ running: false, start: false })
   })
 })

@@ -63,6 +63,7 @@ export interface ManagerUpdateStatus {
 }
 
 export interface StatusSnapshot {
+  restartGuard?: { active: boolean; reason?: string; expiresAt?: string; protectedInterfaces?: string[]; trustedInterfaces?: string[]; lastError?: string }
   healthy: boolean
   version?: string
   boxctlUptimeSeconds?: number
@@ -94,6 +95,8 @@ export interface Capabilities {
 }
 
 export interface Settings {
+  coreRestartGuard?: boolean
+  coreRestartGuardSupported?: boolean
   language: string
   theme: string
   logLevel: string

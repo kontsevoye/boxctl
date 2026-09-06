@@ -327,6 +327,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/external-dashboard", s.handleExternalDashboard)
 	s.mux.HandleFunc("/api/v1/external-dashboard/", s.handleExternalDashboardRoute)
 	s.mux.HandleFunc("/api/v1/service/", s.handleLifecycle)
+	s.mux.HandleFunc("/api/v1/firewall/cleanup", s.handleFirewallCleanup)
 	s.mux.HandleFunc("/api/v1/logs/system", s.handleSystemLogs)
 	s.mux.HandleFunc("/api/v1/logs/system/stream", s.handleSystemLogStream)
 	s.mux.HandleFunc("/api/v1", func(w http.ResponseWriter, r *http.Request) {

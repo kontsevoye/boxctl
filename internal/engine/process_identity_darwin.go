@@ -4,6 +4,10 @@ package engine
 
 import "errors"
 
+func captureProcessIdentity(int) (string, error) {
+	return "", errors.New("persistent engine handoff is supported only on Linux")
+}
+
 func captureProcessExecution(int) (string, string, []string, error) {
 	return "", "", nil, errors.New("persistent engine handoff is supported only on Linux")
 }

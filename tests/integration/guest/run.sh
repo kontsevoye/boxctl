@@ -523,6 +523,7 @@ assert_stopped() {
 	[ -z "$(exact_pid "$mihomo_binary" 2>/dev/null || true)" ] || die 'Mihomo survived service stop'
 	[ -z "$(exact_pid "$sing_box_binary" 2>/dev/null || true)" ] || die 'sing-box survived service stop'
 	! nft list table inet clash >/dev/null 2>&1 || die 'nft table survived service stop'
+	! nft list table inet boxctl_guard >/dev/null 2>&1 || die 'restart guard survived service stop'
 	! ip -N -4 rule show | grep -Eq '^1000:.*proto 196' || die 'policy rule survived service stop'
 	! ip -N -4 route show table 100 | grep -Eq '^(local|2) default dev lo.*proto 196' || die 'policy route survived service stop'
 	[ ! -e "$process_state" ] || die 'process state survived service stop'
@@ -570,6 +571,11 @@ assert_process_identity mihomo "$mihomo_binary" "$core_pid" mihomo-tagged
 assert_engine_dataplane mihomo mihomo-tagged
 assert_dns_upstream mihomo-tagged
 assert_status_resources mihomo-tagged || die 'tagged Mihomo process resource status is incomplete'
+
+note 'verifying panel restart traffic guard and kernel expiry'
+sh -x "$input/guest/restart-guard.sh" "$output" "$manager_pid" "$core_pid" "$csrf_token" >"$output/restart-guard-traffic.log" 2>&1 || die 'restart guard traffic test failed'
+wait_managed_engine mihomo "$mihomo_binary" "$mihomo_profile" || die 'Mihomo did not recover after guarded restart'
+core_pid=$(exact_pid "$mihomo_binary")
 
 note 'running captured and direct traffic flows'
 "$input/guest/traffic.sh" "$output" "$manager_pid" "$core_pid" || die 'traffic test failed'
@@ -660,9 +666,53 @@ assert_process_identity mihomo "$mihomo_binary" "$core_pid" mihomo-reload
 assert_engine_dataplane mihomo mihomo-reload
 assert_dns_upstream mihomo-reload
 
+note 'checking panel firewall recovery while running and already stopped'
+nft list table inet clash >"${output}/recovery-capture.nft"
+sed -E 's/ expires [0-9][^[:space:];,}]*//g' "${output}/restart-guard.nft" >"${output}/recovery-guard.nft"
+nft add table inet boxctl_integration_foreign
+nft -f "${output}/recovery-guard.nft"
+curl --fail --silent --show-error --max-time 30 --cookie "$cookie_jar" \
+	-H "X-CSRF-Token: $csrf_token" -X POST "$api/firewall/cleanup" >"${output}/firewall-cleanup-running.json"
+jq -e '.data.cleaned == true' "${output}/firewall-cleanup-running.json" >/dev/null || die 'panel recovery did not report success'
+assert_stopped
+assert_dns_restored panel-recovery
+# Unknown stale rules must also be removed after the lifecycle already says stopped.
+nft -f "${output}/recovery-capture.nft"
+nft -f "${output}/recovery-guard.nft"
+ip -4 rule add priority 1000 fwmark 1 table 100 protocol 196
+ip -4 route add local default dev lo table 100 proto 196
+curl --fail --silent --show-error --max-time 30 --cookie "$cookie_jar" \
+	-H "X-CSRF-Token: $csrf_token" -X POST "$api/firewall/cleanup" >"${output}/firewall-cleanup-stopped.json"
+assert_stopped
+nft list table inet boxctl_integration_foreign >/dev/null || die 'panel recovery deleted a foreign table'
+
+note 'checking startup cleanup after manager and core die with stale guard, capture and DNS'
+/etc/init.d/boxctl stop
+mkdir -p "$root/.install"
+: >"$root/.install/start-stopped-until-first-success"
+/etc/init.d/boxctl start
+wait_management_authentication || die 'management-only service did not start'
+assert_stopped
+curl --fail --silent --show-error --max-time 60 --cookie "$cookie_jar" \
+	-H "X-CSRF-Token: $csrf_token" -X POST "$api/service/start" >"${output}/recovery-core-start.json"
+wait_managed_engine mihomo "$mihomo_binary" "$mihomo_profile" || die 'core did not start from management-only mode'
+assert_dns_upstream recovery-before-crash
+crashed_manager_pid=$manager_pid
+core_pid=$(exact_pid "$mihomo_binary")
+kill -STOP "$crashed_manager_pid"
+nft -f "${output}/recovery-guard.nft"
+kill -KILL "$core_pid" "$crashed_manager_pid"
+# procd retains --start-stopped even after the successful Start consumed the marker.
+wait_replacement_manager "$crashed_manager_pid" || die 'manager did not respawn after the interrupted recovery'
+wait_management_authentication || die 'management did not recover after the interrupted recovery'
+assert_stopped
+assert_dns_restored interrupted-startup
+nft list table inet boxctl_integration_foreign >/dev/null || die 'startup recovery deleted a foreign table'
+nft delete table inet boxctl_integration_foreign
+
 note 'checking final cleanup'
 /etc/init.d/boxctl stop
 assert_stopped
 assert_dns_restored final-stop
-printf 'service_start=true\npassword_login=true\nstatus_resources=true\nengine_profiles=true\ndns_upstream=true\nmihomo_traffic=true\nsing_box_switch=true\nsing_box_identity=true\nsing_box_traffic=true\nmihomo_return=true\nmanager_crash_recovery=true\nservice_restart=true\nservice_reload=true\ncleanup=true\n' >"${output}/result.txt"
+printf 'service_start=true\npassword_login=true\nstatus_resources=true\nengine_profiles=true\ndns_upstream=true\nmihomo_traffic=true\nsing_box_switch=true\nsing_box_identity=true\nsing_box_traffic=true\nmihomo_return=true\nmanager_crash_recovery=true\nservice_restart=true\nservice_reload=true\npanel_firewall_recovery=true\nstale_startup_cleanup=true\ncleanup=true\n' >"${output}/result.txt"
 note 'all integration checks passed'

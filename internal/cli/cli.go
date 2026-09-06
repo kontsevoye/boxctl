@@ -162,10 +162,10 @@ func Execute(ctx context.Context, args []string, streams Streams, actions Action
 		return actions.Serve(ctx, options)
 	case "fw":
 		if len(args) != 2 {
-			return usage("usage: boxctl fw start|stop|update|diagnose")
+			return usage("usage: boxctl fw start|stop|update|diagnose|guard-off")
 		}
 		switch args[1] {
-		case "start", "stop", "update", "diagnose":
+		case "start", "stop", "update", "diagnose", "guard-off":
 			return actions.Firewall(ctx, args[1])
 		default:
 			return usage("unknown firewall action %q", args[1])
@@ -358,7 +358,7 @@ func printRootUsage(w io.Writer) {
 
 Usage:
   boxctl serve [--root PATH] [--listen ADDRESS] [--start-stopped]
-  boxctl fw start|stop|update|diagnose
+  boxctl fw start|stop|update|diagnose|guard-off
 	  boxctl hotplug wan
 	  boxctl hotplug tun --interface NAME
   boxctl cleanup

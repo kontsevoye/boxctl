@@ -117,6 +117,27 @@ func (manager DNSManager) Apply(ctx context.Context, plan GatewayPlan, backup DN
 	}
 }
 
+// Check verifies the persisted DNS options after a successful activation and
+// runtime readiness probe, without changing or restarting dnsmasq.
+func (manager DNSManager) Check(ctx context.Context, plan GatewayPlan, backup DNSBackup) error {
+	manager = manager.normalized()
+	if err := validateDNSBackup(backup, manager); err != nil {
+		return err
+	}
+	current, err := manager.Backup(ctx)
+	if err != nil {
+		return err
+	}
+	desired := backup.Options
+	if plan.DNSMode == DNSUpstream {
+		desired = desiredUpstreamOptions(plan)
+	}
+	if !equalOptionStates(current.Options, desired) {
+		return errors.New("openwrt: DNS state does not match the activated generation")
+	}
+	return nil
+}
+
 // Reconcile is idempotent: dnsmasq is restarted only when the managed option
 // states differ from the requested state.
 func (manager DNSManager) Reconcile(ctx context.Context, plan GatewayPlan, backup DNSBackup) error {

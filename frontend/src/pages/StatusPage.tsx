@@ -30,6 +30,7 @@ export function StatusContent({ status }: { status: StatusSnapshot }) {
   const selected = status.selectedEngine ?? status.activeProfile?.engine ?? status.core.name
   const activeProfile = status.activeProfile
   return <div className="page-stack">
+    {(status.restartGuard?.active || status.restartGuard?.lastError) && <div className="du-alert du-alert-warning" role="status">{t(status.restartGuard.lastError ? 'restartGuardCleanupFailed' : 'restartGuardActive')}</div>}
     <section className="metrics-grid">
       <SpotlightCard className="du-card metric-card emphasized metric-health">
         <SignalBeam />

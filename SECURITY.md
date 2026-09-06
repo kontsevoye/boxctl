@@ -63,3 +63,30 @@ existing browser session without requiring a daemon restart.
 The project deliberately fails open for packet forwarding when its managed
 core becomes unavailable: capture is removed and the previous dnsmasq options
 are restored. This availability choice does not bypass management API auth.
+
+The optional **Blackhole during restart** setting (`CORE_RESTART_GUARD`, off by
+default) temporarily drops IPv4/IPv6 forwarding from protected LAN interfaces
+to non-local interfaces during explicit panel restarts of a running core.
+The separate, ownership-marked `inet boxctl_guard` table spans old capture
+cleanup, target activation, and rollback. Target or rollback failure ends in
+fail-open cleanup. Timed ingress set elements expire after at most five
+minutes without the manager; no persistent kill-switch or boot-time blocking
+policy is installed. Stopped-core startup, Stop, crashes outside a restart,
+hot reload and background updates remain unguarded.
+
+This guard requires software/hardware flow offload to be disabled and rejects
+live nftables flowtables. Its boundary excludes router-originated output and
+router-local relays, and does not imply IPv6 tunnelling after restart. Normal
+fw4 reload preserves the independent table; a global ruleset flush or changing
+protected LAN device names during the restart is outside this boundary.
+`boxctl fw guard-off` disables the policy and removes only a verified owned
+guard table. The panel also exposes active guard state and cleanup failures.
+
+The authenticated, CSRF-protected `POST /api/v1/firewall/cleanup` recovery action
+serializes with core operations, restores saved DNS and removes only boxctl-owned
+capture/policy state before stopping the core. It then removes the owned restart
+guard even if earlier cleanup failed. It can recheck stale state while already
+stopped, never flushes the global ruleset, and refuses concurrent operations.
+A capture/DNS cleanup failure retains the core for a safe retry. Startup performs
+stale guard removal and normal fail-open lifecycle reconciliation; verified live
+core adoption preserves working capture and DNS.

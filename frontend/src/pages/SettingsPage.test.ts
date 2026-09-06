@@ -61,6 +61,11 @@ describe('settings update payload', () => {
       proxyOnlyUDPPorts: '',
     }
 
+    expect(settingsUpdatePayload(settings, lists).coreRestartGuard).toBe(false)
+    settings.coreRestartGuard = true
+    expect(settingsUpdatePayload(settings, lists).coreRestartGuard).toBe(true)
+    settings.coreRestartGuard = false
+    expect(settingsUpdatePayload(settings, lists).coreRestartGuard).toBe(false)
     expect(settingsUpdatePayload(settings, lists).autoFakeIPWhitelist).toBe(true)
 		expect(settingsUpdatePayload(settings, lists).autoFakeIPIncludeExternalIPProviders).toBe(true)
     settings.autoFakeIPWhitelist = false

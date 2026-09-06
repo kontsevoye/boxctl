@@ -24,6 +24,8 @@ OpenWrt dataplane.
 - export and restore of portable boxctl state;
 - fail-open cleanup that removes boxctl-owned routing state and restores DNS
   settings when the core stops;
+- optional LAN traffic protection during manual panel restarts, controlled by
+  **Settings → Blackhole during restart** (off by default);
 - separate traffic, connection, CPU, and memory metrics for boxctl and the
   active proxy core.
 
@@ -34,6 +36,31 @@ installer upgrades that installation while preserving its state.
 `kmod-inet-diag` is installed for process-aware sing-box routing rules;
 `kmod-nft-queue` is intentionally not required because boxctl keeps sing-box
 `auto_redirect` disabled and remains the sole nftables owner.
+
+Restart protection applies to **Restart**, **Save & restart**, and confirmed
+profile switches while a core is running. It never blocks initial startup,
+opening the panel, manual Stop, hot reload, or automatic maintenance. It
+requires disabled software/hardware flow offloading. The temporary IPv4/IPv6
+forwarding block is removed after recovery or a failed restart; a five-minute
+kernel timeout bounds it even after a manager crash. Router access stays open.
+**Settings → Network recovery → Stop core and clean firewall** removes owned
+capture, policy rules and the restart guard, restores saved dnsmasq options,
+and leaves the core stopped. The action also works after a failed restart or
+an already stopped core, independently of whether restart protection is enabled.
+Startup removes stale guards and reconciles owned capture/DNS when no live core
+is adopted. Foreign firewall state is preserved; cleanup errors stay visible.
+For local emergency recovery, run:
+
+```sh
+BOXCTL_ROOT=/opt/boxctl /opt/boxctl/bin/boxctl fw guard-off
+```
+
+See [the traffic guard contract](docs/core-downtime-guard.md) for exact boundaries.
+
+Endpoint bypass refresh excludes synthetic fake-IP addresses from DNS answers
+and persisted caches, including configured custom pools. This keeps provider
+hosts such as `raw.githubusercontent.com` reachable through transparent capture
+when the system resolver already points at the running proxy core.
 
 The selected profile is the only persisted engine selector. Profile names may
 be reused across engines because identity is the pair `engine:name`; the UI

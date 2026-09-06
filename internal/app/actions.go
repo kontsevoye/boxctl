@@ -454,12 +454,25 @@ func (actions *Actions) firewall(ctx context.Context, action, reportedTUN string
 	if settingsErr != nil {
 		return settingsErr
 	}
-	if settings.OperatingMode == "server" && action != "stop" {
+	if settings.OperatingMode == "server" && action != "stop" && action != "guard-off" {
 		return nil
 	}
 	switch action {
+	case "guard-off":
+		activation, ok := oneShot.Activation.(*OpenWrtActivation)
+		if !ok {
+			return errors.New("restart guard recovery requires OpenWrt")
+		}
+		return activation.withTransaction(ctx, false, func() error {
+			if err := openwrt.RemoveRestartGuard(ctx, actions.runner); err != nil {
+				return err
+			}
+			settings.Raw["CORE_RESTART_GUARD"] = "false"
+			return settingsStore.SaveSettings(settingsRelativePath, settings.Raw)
+		})
 	case "stop":
-		return oneShot.Activation.Deactivate(ctx, engine.PreparedCore{})
+		deactivateErr := oneShot.Activation.Deactivate(ctx, engine.PreparedCore{})
+		return errors.Join(deactivateErr, removeOneShotRestartGuard(ctx, oneShot.Activation, actions.runner))
 	case "start", "update", "diagnose":
 		active, ok := oneShot.Activation.(activeGenerationProvider)
 		if !ok {
@@ -542,7 +555,9 @@ func (actions *Actions) Cleanup(ctx context.Context) (returnErr error) {
 		return err
 	}
 	defer func() { returnErr = errors.Join(returnErr, ownerLock.Unlock()) }()
-	if err := oneShot.Activation.Deactivate(ctx, engine.PreparedCore{}); err != nil {
+	deactivateErr := oneShot.Activation.Deactivate(ctx, engine.PreparedCore{})
+	guardErr := removeOneShotRestartGuard(ctx, oneShot.Activation, actions.runner)
+	if err := errors.Join(deactivateErr, guardErr); err != nil {
 		return err
 	}
 	locks, err := state.NewStore(actions.openWrtLockRoot)
@@ -1066,6 +1081,17 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	lifecycle := &Lifecycle{
 		Preparer: enginePreparer, Core: host, Activation: activation, Logger: logger,
 	}
+	var restartGuard *openWrtRestartGuard
+	if !options.NoGateway && !options.NoCore {
+		restartGuard = &openWrtRestartGuard{activation: openWrtActivation, runner: runner}
+		lifecycle.RestartGuard = restartGuard
+		cleanupContext, cancelCleanup := context.WithTimeout(ctx, openWrtRollbackTimeout)
+		cleanupErr := restartGuard.Remove(cleanupContext)
+		cancelCleanup()
+		if cleanupErr != nil {
+			logger.Error("stale restart guard cleanup could not be verified; management recovery remains available", "error", cleanupErr)
+		}
+	}
 	lifecycle.OnStarted = func(prepared engine.PreparedCore) error {
 		markerErr := mihomoPreparer.State.RemoveRegular(state.FirstStartPending)
 		active, activeErr := mihomoPreparer.Profiles.Current()
@@ -1192,9 +1218,16 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	}
 	services.SessionSecrets = credentials
 	services.AdminSetup = credentials
+	if restartGuard != nil {
+		services.Firewall = FirewallService{Lifecycle: lifecycle}
+	}
 	settingsService, err := NewSettingsService(root)
 	if err != nil {
 		return nil, err
+	}
+	settingsService.Lifecycle = lifecycle
+	if restartGuard != nil {
+		settingsService.ConfigureRestartGuard = restartGuard.Configure
 	}
 	settingsService.SelectedEngine = func() string { return selectedProfileEngine(mihomoPreparer.Profiles) }
 	settingsService.DiscoverInterfaces = func(discoveryContext context.Context) (web.InterfaceCatalog, error) {

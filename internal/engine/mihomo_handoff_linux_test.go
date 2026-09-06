@@ -5,6 +5,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,6 +88,75 @@ func TestMihomoDriverAdoptsExactPersistedProcess(t *testing.T) {
 	}
 	if _, err := os.Stat(runtimePath); !os.IsNotExist(err) {
 		t.Fatalf("runtime survived stop: %v", err)
+	}
+}
+
+func TestAdoptionCleansOnlyVerifiedRuntimeOfMissingProcess(t *testing.T) {
+	for _, scenario := range []string{"dead", "live-changed-identity", "unsafe-runtime"} {
+		t.Run(scenario, func(t *testing.T) {
+			directory := t.TempDir()
+			runtimeRoot := filepath.Join(directory, "boxctl-mihomo-dead")
+			if err := os.Mkdir(runtimeRoot, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			runtimePath := filepath.Join(runtimeRoot, "mihomo-runtime.yaml")
+			if err := os.WriteFile(runtimePath, []byte("mode: rule\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("/bin/sleep", "30")
+			cmd.SysProcAttr = childProcessAttributes(true)
+			process, err := startChildProcess(cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = cmd.Process.Kill(); _ = process.Wait() }()
+			identity, executable, argv, err := captureProcessExecution(cmd.Process.Pid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "live-changed-identity" {
+				identity = "0"
+			} else {
+				if err := cmd.Process.Kill(); err != nil {
+					t.Fatal(err)
+				}
+				_ = process.Wait()
+			}
+			prepared := PreparedCore{
+				Engine: mihomoEngineName, BinaryPath: "/bin/sleep", RuntimeConfigPath: runtimePath, HomeDir: directory,
+				Args: []string{"30"}, runtimeConfigRoot: runtimeRoot, runtimeConfigOwnedPath: runtimePath,
+			}
+			statePath := filepath.Join(directory, "core-process.json")
+			driver := NewMihomoDriver(MihomoOptions{ProcessStatePath: statePath})
+			if err := driver.supervisor.writeProcessStateValues(cmd.Process.Pid, identity, executable, argv, time.Now().UTC(), prepared); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "unsafe-runtime" {
+				if err := os.Chmod(runtimeRoot, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, _, err = driver.Adopt(context.Background())
+			if scenario == "dead" {
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("missing process adoption: %v", err)
+				}
+				for _, path := range []string{statePath, runtimeRoot} {
+					if _, err := os.Stat(path); !os.IsNotExist(err) {
+						t.Fatalf("stale owned path survived: %s (%v)", path, err)
+					}
+				}
+			} else {
+				if err == nil {
+					t.Fatal("unsafe adoption succeeded")
+				}
+				for _, path := range []string{statePath, runtimePath} {
+					if _, err := os.Stat(path); err != nil {
+						t.Fatalf("unverified path was removed: %s (%v)", path, err)
+					}
+				}
+			}
+		})
 	}
 }
 

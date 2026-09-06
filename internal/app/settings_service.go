@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/kontsevoye/boxctl/internal/platform/openwrt"
 	"github.com/kontsevoye/boxctl/internal/state"
@@ -16,11 +17,14 @@ import (
 )
 
 type SettingsService struct {
-	State              state.Store
-	OnChanged          func(context.Context, bool) error
-	SetStartOnBoot     func(context.Context, bool) error
-	DiscoverInterfaces func(context.Context) (web.InterfaceCatalog, error)
-	SelectedEngine     func() string
+	mu                    sync.Mutex
+	Lifecycle             *Lifecycle
+	ConfigureRestartGuard func(context.Context, RuntimeSettings) error
+	State                 state.Store
+	OnChanged             func(context.Context, bool) error
+	SetStartOnBoot        func(context.Context, bool) error
+	DiscoverInterfaces    func(context.Context) (web.InterfaceCatalog, error)
+	SelectedEngine        func() string
 }
 
 func NewSettingsService(root string) (*SettingsService, error) {
@@ -37,6 +41,7 @@ func (service *SettingsService) Settings(ctx context.Context) (web.Settings, err
 		return web.Settings{}, err
 	}
 	result := runtimeSettingsWeb(runtimeSettings)
+	result.CoreRestartGuardSupported = service.ConfigureRestartGuard != nil
 	if service.DiscoverInterfaces != nil {
 		if catalog, discoverErr := service.DiscoverInterfaces(ctx); discoverErr == nil {
 			result.Interfaces = append([]web.InterfaceOption(nil), catalog.Interfaces...)
@@ -47,6 +52,18 @@ func (service *SettingsService) Settings(ctx context.Context) (web.Settings, err
 }
 
 func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.SettingsPatch) (web.Settings, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	unlock := func() {}
+	if service.Lifecycle != nil {
+		if err := service.Lifecycle.lockOperation(ctx); err != nil {
+			return web.Settings{}, err
+		}
+		var once sync.Once
+		unlock = func() { once.Do(service.Lifecycle.opMu.Unlock) }
+	}
+	defer unlock()
+
 	current, err := LoadRuntimeSettings(service.State)
 	if err != nil {
 		return web.Settings{}, err
@@ -58,6 +75,7 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 	applyStringPatch(raw, "UPDATE_CHANNEL", patch.UpdateChannel)
 	applyStringPatch(raw, "PROXY_MODE", patch.CaptureMode)
 	applyBoolPatch(raw, "START_ON_BOOT", patch.StartOnBoot)
+	applyBoolPatch(raw, "CORE_RESTART_GUARD", patch.CoreRestartGuard)
 	applyBoolPatch(raw, "AUTO_UPDATE", patch.AutoUpdate)
 	applyStringPatch(raw, "OPERATING_MODE", patch.OperatingMode)
 	applyStringPatch(raw, "INTERFACE_MODE", patch.InterfaceMode)
@@ -133,6 +151,14 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 	if err := validatePublicSettings(candidate.Raw); err != nil {
 		return web.Settings{}, err
 	}
+	if candidate.CoreRestartGuard && (candidate.OperatingMode != "gateway" || service.ConfigureRestartGuard == nil) {
+		return web.Settings{}, &web.PublicError{Status: http.StatusConflict, Code: "restart_guard_unavailable", Message: "Restart protection requires an owned OpenWrt gateway"}
+	}
+	if service.ConfigureRestartGuard != nil && (candidate.CoreRestartGuard || current.CoreRestartGuard != candidate.CoreRestartGuard) {
+		if err := service.ConfigureRestartGuard(ctx, candidate); err != nil {
+			return web.Settings{}, err
+		}
+	}
 	currentBoot := settingBoolUnchecked(current.Raw, "START_ON_BOOT", true)
 	candidateBoot := settingBoolUnchecked(candidate.Raw, "START_ON_BOOT", true)
 	bootChanged := currentBoot != candidateBoot
@@ -148,6 +174,7 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 		}
 		return web.Settings{}, err
 	}
+	unlock() // Callbacks may restart under the same lifecycle gate.
 	selectedEngine := state.EngineMihomo
 	if service.SelectedEngine != nil {
 		selectedEngine = normalizedEngine(service.SelectedEngine())
@@ -172,6 +199,7 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 		}
 	}
 	result := runtimeSettingsWeb(candidate)
+	result.CoreRestartGuardSupported = service.ConfigureRestartGuard != nil
 	if service.DiscoverInterfaces != nil {
 		if catalog, discoverErr := service.DiscoverInterfaces(ctx); discoverErr == nil {
 			result.Interfaces = append([]web.InterfaceOption(nil), catalog.Interfaces...)
@@ -198,7 +226,8 @@ func runtimeInterfaceCatalog(discovery openwrt.InterfaceDiscovery) web.Interface
 
 func runtimeSettingsWeb(settings RuntimeSettings) web.Settings {
 	return web.Settings{
-		Language: valueOr(settings.Raw, "LANGUAGE", "en"), Theme: valueOr(settings.Raw, "THEME", "system"),
+		CoreRestartGuard: settings.CoreRestartGuard,
+		Language:         valueOr(settings.Raw, "LANGUAGE", "en"), Theme: valueOr(settings.Raw, "THEME", "system"),
 		LogLevel: valueOr(settings.Raw, "LOG_LEVEL", "info"), UpdateChannel: valueOr(settings.Raw, "UPDATE_CHANNEL", "stable"),
 		CaptureMode: string(settings.CaptureMode), AvailableCaptureModes: []string{"tproxy", "hybrid", "tun", "mixed", "mixed2"},
 		StartOnBoot: settingBoolUnchecked(settings.Raw, "START_ON_BOOT", true), AutoUpdate: settingBoolUnchecked(settings.Raw, "AUTO_UPDATE", false),

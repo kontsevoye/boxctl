@@ -147,6 +147,9 @@ func (service *ConfigService) SaveRawConfig(ctx context.Context, update web.RawC
 	}
 	info, _ := os.Stat(service.Preparer.Layout.MihomoConfig)
 	applied := false
+	if apply == configApplyRestart {
+		ctx = panelRestart(ctx, "save-and-restart")
+	}
 	var applyCallback func(context.Context) (bool, error)
 	switch apply {
 	case configApplySave:
@@ -303,6 +306,9 @@ func (service *ConfigService) SaveProfileConfig(ctx context.Context, id string, 
 		}
 	}
 
+	if apply == configApplyRestart {
+		ctx = panelRestart(ctx, "save-and-restart")
+	}
 	applied := false
 	switch {
 	case !isActive || apply == configApplySave:

@@ -32,6 +32,7 @@ export function SettingsPage() {
   const externalDashboardLaunch = useExternalDashboard(() => externalDashboard.reload())
   const [form, setForm] = useState<Settings>()
   const [busy, setBusy] = useState(false)
+	const [firewallBusy, setFirewallBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState<APIError>()
   const [externalDashboardBusy, setExternalDashboardBusy] = useState(false)
@@ -93,6 +94,19 @@ export function SettingsPage() {
       setBusy(false)
     }
   }
+	const cleanupFirewall = async () => {
+		setFirewallBusy(true)
+		setError(undefined)
+		setMessage('')
+		try {
+			await request('/firewall/cleanup', { method: 'POST', body: '{}' })
+			setMessage(t('firewallCleaned'))
+		} catch (reason) {
+			setError(reason instanceof APIError ? reason : new APIError(0, 'network_error', String(reason)))
+		} finally {
+			setFirewallBusy(false)
+		}
+	}
   const manageExternalDashboard = async () => {
     const installed = externalDashboard.data?.installed ?? false
     if (!installed && !confirm(t('confirmExternalDashboardTrust'))) return
@@ -119,6 +133,12 @@ export function SettingsPage() {
     {query.error && <ErrorPanel error={query.error} onRetry={query.reload} />}
     {error && <Toast tone="error" onDismiss={() => setError(undefined)}><strong>{t('requestFailed')}</strong><span>{error.message}</span></Toast>}
     {!error && message && <Toast tone="success" onDismiss={() => setMessage('')}>{message}</Toast>}
+		{canPerform(capabilities, 'cleanupFirewall') && <div className="du-card panel settings-section">
+			<div className="title-row">
+				<div><h2>{t('firewallRecovery')}</h2><small>{t('firewallRecoveryHint')}</small></div>
+				<button className="du-btn du-btn-warning du-btn-sm" type="button" disabled={firewallBusy || busy} onClick={() => void cleanupFirewall()}>{firewallBusy ? t('firewallCleaning') : t('cleanupFirewall')}</button>
+			</div>
+		</div>}
     {form && <form className="du-card panel settings-form" onSubmit={save}>
       {Object.keys(portErrors).length > 0 && <div className="du-alert du-alert-error" role="alert">{t('invalidPortLists')}</div>}
       <div className="form-grid">
@@ -130,6 +150,7 @@ export function SettingsPage() {
         <ChoiceField label={t('captureMode')} value={form.captureMode} options={(engineCaptureModes.length > 0 ? engineCaptureModes : (form.availableCaptureModes ?? [form.captureMode])).map((value) => ({ value, label: value }))} onChange={(value) => update('captureMode', value)} />
       </div>
       <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.startOnBoot} onChange={(event) => update('startOnBoot', event.currentTarget.checked)} /><span>{t('startOnBoot')}</span></label>
+      <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.coreRestartGuard ?? false} disabled={!form.coreRestartGuardSupported && !form.coreRestartGuard} onChange={(event) => update('coreRestartGuard', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('coreRestartGuard')}</span><small>{t('coreRestartGuardHint')}</small>{!form.coreRestartGuardSupported && <small>{t('coreRestartGuardUnavailable')}</small>}</span></label>
 		<label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoUpdate ?? false} onChange={(event) => update('autoUpdate', event.currentTarget.checked)} /><span>{t('autoUpdate')}</span></label>
 		<div className="settings-section">
 			<h2>{t('engineUpdates')}</h2>
@@ -284,6 +305,7 @@ export function settingsUpdatePayload(form: Settings, listText: Record<ListField
     updateChannel: form.updateChannel,
     captureMode: form.captureMode,
     startOnBoot: form.startOnBoot,
+    coreRestartGuard: form.coreRestartGuard ?? false,
     autoUpdate: form.autoUpdate ?? false,
 		operatingMode: form.operatingMode ?? 'gateway',
     dnsMode: form.dnsMode,

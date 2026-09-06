@@ -58,10 +58,12 @@ type LifecycleSnapshot struct {
 // Lifecycle provides the core -> gateway -> DNS transaction and fail-open
 // crash monitor. It never holds its mutex while running external commands.
 type Lifecycle struct {
-	Preparer   ActivePreparer
-	Core       CoreRuntime
-	Activation Activation
-	Logger     *slog.Logger
+	Preparer        ActivePreparer
+	Core            CoreRuntime
+	Activation      Activation
+	Logger          *slog.Logger
+	RestartGuard    RestartTrafficGuard
+	guardInProgress bool // protected by opMu
 	// OnStarted persists local host state after the complete core + gateway +
 	// DNS transaction succeeds. A persistence failure is logged and leaves the
 	// runtime running; for the first-start marker this fails safely by keeping
@@ -225,6 +227,12 @@ func (lifecycle *Lifecycle) startPreparedLockedWithAcceptance(
 		rollbackErr := lifecycle.rollback(ctx, prepared)
 		return lifecycle.failAfterRollback(errors.Join(fmt.Errorf("core readiness failed after gateway activation: %w", postActivateErr), rollbackErr))
 	}
+	if lifecycle.guardInProgress {
+		if err := lifecycle.RestartGuard.Verify(ctx, prepared); err != nil {
+			rollbackErr := lifecycle.rollback(ctx, prepared)
+			return lifecycle.failAfterRollback(errors.Join(fmt.Errorf("verify guarded gateway: %w", err), rollbackErr))
+		}
+	}
 	health = postActivateHealth
 	lifecycle.mu.Lock()
 	lifecycle.snap = LifecycleSnapshot{
@@ -240,7 +248,7 @@ func (lifecycle *Lifecycle) startPreparedLockedWithAcceptance(
 // target must have been prepared before this call while the old selection was
 // still authoritative. commit persists the new active profile only after the
 // target core and dataplane are ready.
-func (lifecycle *Lifecycle) SwitchPrepared(ctx context.Context, target engine.PreparedCore, commit func() error) (bool, error) {
+func (lifecycle *Lifecycle) SwitchPrepared(ctx context.Context, target engine.PreparedCore, commit func() error) (changed bool, returnErr error) {
 	if commit == nil {
 		engine.CleanupPreparedRuntime(target)
 		return false, errors.New("profile switch commit is required")
@@ -276,6 +284,12 @@ func (lifecycle *Lifecycle) SwitchPrepared(ctx context.Context, target engine.Pr
 		}
 	}()
 
+	ctx, finishGuard, guardErr := lifecycle.beginRestartGuard(ctx, current.Prepared)
+	if guardErr != nil {
+		engine.CleanupPreparedRuntime(target)
+		return true, fmt.Errorf("install restart guard: %w", guardErr)
+	}
+	defer func() { returnErr = errors.Join(returnErr, finishGuard()) }()
 	if err := lifecycle.stopLocked(ctx); err != nil {
 		engine.CleanupPreparedRuntime(target)
 		return true, fmt.Errorf("stop previous generation: %w", err)
@@ -315,6 +329,10 @@ func (lifecycle *Lifecycle) ReconfigurePrepared(
 		return false, err
 	}
 	defer lifecycle.opMu.Unlock()
+	return lifecycle.reconfigurePreparedLocked(ctx, target, commit)
+}
+
+func (lifecycle *Lifecycle) reconfigurePreparedLocked(ctx context.Context, target engine.PreparedCore, commit func() error) (changed bool, returnErr error) {
 	lifecycle.defaults()
 	if err := lifecycle.validate(); err != nil {
 		engine.CleanupPreparedRuntime(target)
@@ -343,6 +361,12 @@ func (lifecycle *Lifecycle) ReconfigurePrepared(
 			engine.CleanupPreparedRuntime(rollbackPrepared)
 		}
 	}()
+	ctx, finishGuard, guardErr := lifecycle.beginRestartGuard(ctx, current.Prepared)
+	if guardErr != nil {
+		engine.CleanupPreparedRuntime(target)
+		return true, fmt.Errorf("install restart guard: %w", guardErr)
+	}
+	defer func() { returnErr = errors.Join(returnErr, finishGuard()) }()
 	if err := lifecycle.stopLocked(ctx); err != nil {
 		engine.CleanupPreparedRuntime(target)
 		return true, fmt.Errorf("stop previous generation: %w", err)
@@ -514,16 +538,29 @@ func (lifecycle *Lifecycle) Stop(ctx context.Context) error {
 		return err
 	}
 	defer lifecycle.opMu.Unlock()
-	return lifecycle.stopLocked(ctx)
+	err := lifecycle.stopLocked(ctx)
+	if lifecycle.RestartGuard != nil {
+		status := lifecycle.RestartGuard.Status()
+		if status.Active || status.LastError != "" {
+			cleanup, cancel := context.WithTimeout(context.Background(), openWrtRollbackTimeout)
+			defer cancel()
+			err = errors.Join(err, lifecycle.RestartGuard.Remove(cleanup))
+		}
+	}
+	return err
 }
 
 func (lifecycle *Lifecycle) stopLocked(ctx context.Context) error {
+	return lifecycle.stopWithCleanupLocked(ctx, false)
+}
+
+func (lifecycle *Lifecycle) stopWithCleanupLocked(ctx context.Context, forceCleanup bool) error {
 	lifecycle.defaults()
 	if err := lifecycle.validate(); err != nil {
 		return err
 	}
 	current := lifecycle.Snapshot()
-	if current.State == LifecycleStopped && current.Prepared.BinaryPath == "" {
+	if !forceCleanup && current.State == LifecycleStopped && current.Prepared.BinaryPath == "" {
 		return nil
 	}
 	lifecycle.setState(LifecycleStopping, "")
@@ -564,6 +601,15 @@ func (lifecycle *Lifecycle) Restart(ctx context.Context) error {
 		return err
 	}
 	defer lifecycle.opMu.Unlock()
+	if _, panel := ctx.Value(panelRestartKey{}).(string); panel && lifecycle.RestartGuard != nil && lifecycle.Snapshot().State == LifecycleRunning {
+		enabled, err := lifecycle.RestartGuard.Enabled()
+		if err != nil {
+			return err
+		}
+		if enabled {
+			return lifecycle.restartPreparedLocked(ctx)
+		}
+	}
 	if err := lifecycle.stopLocked(ctx); err != nil {
 		return err
 	}
@@ -582,10 +628,36 @@ func (lifecycle *Lifecycle) RestartIfRunning(ctx context.Context) (bool, error) 
 	if lifecycle.Snapshot().State != LifecycleRunning {
 		return false, nil
 	}
+	if _, panel := ctx.Value(panelRestartKey{}).(string); panel && lifecycle.RestartGuard != nil {
+		enabled, err := lifecycle.RestartGuard.Enabled()
+		if err != nil {
+			return false, err
+		}
+		if enabled {
+			return true, lifecycle.restartPreparedLocked(ctx)
+		}
+	}
 	if err := lifecycle.stopLocked(ctx); err != nil {
 		return true, err
 	}
 	return true, lifecycle.startLocked(ctx)
+}
+
+// restartPreparedLocked validates before teardown and shares the exact-runtime
+// rollback path used by Save & restart. The operation lock is already held.
+func (lifecycle *Lifecycle) restartPreparedLocked(ctx context.Context) error {
+	lifecycle.defaults()
+	if err := lifecycle.validate(); err != nil {
+		return err
+	}
+	prepareContext, cancel := context.WithTimeout(ctx, lifecycle.PrepareTimeout)
+	target, err := lifecycle.Preparer.PrepareActive(prepareContext)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("prepare restart target: %w", err)
+	}
+	_, err = lifecycle.reconfigurePreparedLocked(ctx, target, nil)
+	return err
 }
 
 // lockOperation makes lifecycle serialization responsive to request and
@@ -639,6 +711,7 @@ func (lifecycle *Lifecycle) Monitor(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
+		lifecycle.retryRestartGuardCleanup()
 		current := lifecycle.Snapshot()
 		if current.State == LifecycleCleanupFailed {
 			lifecycle.Logger.Warn("retrying unresolved owned activation cleanup")

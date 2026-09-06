@@ -1094,6 +1094,7 @@ func (s *Server) handleCoreRoute(w http.ResponseWriter, r *http.Request) {
 		if capabilities.Actions == nil {
 			capabilities.Actions = map[string]bool{}
 		}
+		capabilities.Actions["cleanupFirewall"] = s.services.Firewall != nil
 		writeData(w, http.StatusOK, capabilities)
 	case "reload":
 		if len(segments) != 1 {
@@ -1639,6 +1640,23 @@ func (s *Server) handleLifecycle(w http.ResponseWriter, r *http.Request) {
 		Action   string `json:"action"`
 		Accepted bool   `json:"accepted"`
 	}{Action: segments[0], Accepted: true})
+}
+
+func (s *Server) handleFirewallCleanup(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if s.services.Firewall == nil {
+		writeUnsupported(w, r)
+		return
+	}
+	if err := s.services.Firewall.CleanupFirewall(r.Context()); err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, struct {
+		Cleaned bool `json:"cleaned"`
+	}{Cleaned: true})
 }
 
 func (s *Server) handleSystemLogStream(w http.ResponseWriter, r *http.Request) {

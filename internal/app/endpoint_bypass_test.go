@@ -156,3 +156,75 @@ func endpointPrefixStrings(prefixes []netip.Prefix) []string {
 	slices.Sort(result)
 	return result
 }
+
+func TestEndpointBypassRejectsSyntheticDNSAndPurgesPoisonedCache(t *testing.T) {
+	for _, singBox := range []bool{false, true} {
+		for _, answer := range []string{"synthetic-only", "mixed", "lookup-failure"} {
+			name := "mihomo/" + answer
+			if singBox {
+				name = "sing-box/" + answer
+			}
+			t.Run(name, func(t *testing.T) {
+				store, err := state.NewStore(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				layout, err := state.NewLayout(store.Root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				manager := NewEndpointBypassManager(layout, store)
+				resolver := &endpointResolverStub{addresses: map[string][]netip.Addr{
+					"raw.githubusercontent.com": {netip.MustParseAddr("198.18.9.81"), netip.MustParseAddr("203.0.113.42")},
+					"poisoned.example":          {netip.MustParseAddr("198.19.1.2")},
+				}, errors: map[string]error{}}
+				manager.Resolver = resolver
+				cache := endpointBypassCache{Version: 1, Hosts: map[string][]string{
+					endpointHostKey("raw.githubusercontent.com"): {"198.18.9.81", "203.0.113.42", "185.199.109.133"},
+					endpointHostKey("poisoned.example"):          {"198.19.1.2", "203.0.113.99"},
+				}}
+				if err := store.WriteJSON(endpointBypassCachePath, cache, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				want := "185.199.109.133/32"
+				switch answer {
+				case "mixed":
+					resolver.addresses["raw.githubusercontent.com"] = append(resolver.addresses["raw.githubusercontent.com"], netip.MustParseAddr("185.199.108.133"))
+					want = "185.199.108.133/32"
+				case "lookup-failure":
+					resolver.errors["raw.githubusercontent.com"] = errors.New("DNS unavailable")
+					resolver.errors["poisoned.example"] = errors.New("DNS unavailable")
+				}
+				prepare := func(persist bool) ([]netip.Prefix, error) {
+					if singBox {
+						return manager.PrepareSingBox(context.Background(), []byte(`{"dns":{"servers":[{"type":"fakeip","inet4_range":"203.0.113.0/24"}]},"outbounds":[{"server":"raw.githubusercontent.com"},{"server":"poisoned.example"},{"server":"198.18.1.1"}]}`), persist)
+					}
+					return manager.PrepareMihomo(context.Background(), []byte("dns:\n  fake-ip-range: 203.0.113.1/24\nrule-providers:\n  github:\n    url: https://raw.githubusercontent.com/test/rules.yaml\nproxies:\n  - server: poisoned.example\n  - server: 198.18.1.1\n"), persist)
+				}
+				before, err := store.Read(endpointBypassCachePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, persist := range []bool{false, true} {
+					result, err := prepare(persist)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got := endpointPrefixStrings(result); !slices.Equal(got, []string{want}) {
+						t.Fatalf("unsafe endpoint bypasses = %v, want %s", got, want)
+					}
+					after, err := store.Read(endpointBypassCachePath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !persist && string(before) != string(after) {
+						t.Fatal("preview changed the cache")
+					}
+					if persist && (strings.Contains(string(after), "198.18.") || strings.Contains(string(after), "198.19.") || strings.Contains(string(after), "203.0.113.")) {
+						t.Fatalf("poisoned cache survived: %s", after)
+					}
+				}
+			})
+		}
+	}
+}

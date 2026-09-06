@@ -72,6 +72,16 @@ func (service *StatusService) Status(ctx context.Context) (web.StatusSnapshot, e
 		SelectedEngine: selectedEngine,
 		RunningEngine:  runningEngine,
 	}
+	if service.Lifecycle.RestartGuard != nil {
+		guard := service.Lifecycle.RestartGuard.Status()
+		result.RestartGuard = &guard
+		if guard.LastError != "" {
+			result.Healthy = false
+			if guard.Active && coreState == LifecycleRunning {
+				result.Core.State = "running-guarded"
+			}
+		}
+	}
 	if service.ManagerUpdates != nil {
 		managerUpdate := service.ManagerUpdates.ManagerUpdateStatus()
 		result.ManagerUpdate = &managerUpdate
@@ -139,7 +149,7 @@ func (service LifecycleService) Stop(ctx context.Context) error {
 	return service.Lifecycle.Stop(ctx)
 }
 func (service LifecycleService) Restart(ctx context.Context) error {
-	return service.Lifecycle.Restart(ctx)
+	return service.Lifecycle.Restart(panelRestart(ctx, "panel-restart"))
 }
 
 var _ web.StatusService = (*StatusService)(nil)
