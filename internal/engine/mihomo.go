@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -357,7 +358,11 @@ func (d *MihomoDriver) Reload(ctx context.Context, prepared PreparedCore) error 
 	if err != nil {
 		return err
 	}
-	if err := controller.Reload(ctx, prepared.RuntimeConfigPath); err != nil {
+	content, err := readMihomoReloadConfig(prepared)
+	if err != nil {
+		return err
+	}
+	if err := controller.Reload(ctx, content); err != nil {
 		return err
 	}
 	previous, persistErr := d.supervisor.replacePrepared(prepared)
@@ -367,6 +372,34 @@ func (d *MihomoDriver) Reload(ctx context.Context, prepared PreparedCore) error 
 	removeMihomoRuntime(previous)
 	d.supervisor.emitLog("supervisor", "Mihomo configuration hot-reloaded")
 	return nil
+}
+
+func readMihomoReloadConfig(prepared PreparedCore) ([]byte, error) {
+	if err := validatePreparedMihomo(prepared); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(prepared.RuntimeConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	//nolint:gosec // exact manager-owned regular file under a verified private directory
+	file, err := os.Open(prepared.RuntimeConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("open Mihomo reload config: %w", err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() {
+		return nil, errors.New("mihomo reload config changed while opening")
+	}
+	content, err := io.ReadAll(io.LimitReader(file, maxControllerResponse+1))
+	if err != nil {
+		return nil, fmt.Errorf("read Mihomo reload config: %w", err)
+	}
+	if len(content) > maxControllerResponse {
+		return nil, errors.New("mihomo reload config exceeds size limit")
+	}
+	return content, nil
 }
 
 // CleanupPreparedRuntime removes only the exact private runtime file and root

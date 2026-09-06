@@ -308,7 +308,7 @@ func TestMihomoLifecycleReloadHealthLogsAndProcessGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
-	reloadPaths := make([]string, 0)
+	reloadConfigs := make([]string, 0)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer lifecycle-secret" {
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
@@ -319,14 +319,19 @@ func TestMihomoLifecycleReloadHealthLogsAndProcessGroup(t *testing.T) {
 			_, _ = io.WriteString(writer, `{"version":"controller-test"}`)
 		case request.Method == http.MethodPut && request.URL.Path == "/configs":
 			var payload struct {
-				Path string `json:"path"`
+				Path    string `json:"path"`
+				Payload string `json:"payload"`
 			}
 			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 				http.Error(writer, err.Error(), http.StatusBadRequest)
 				return
 			}
+			if payload.Path != "" || payload.Payload == "" {
+				http.Error(writer, "reload must use inline config", http.StatusBadRequest)
+				return
+			}
 			mu.Lock()
-			reloadPaths = append(reloadPaths, payload.Path)
+			reloadConfigs = append(reloadConfigs, payload.Payload)
 			mu.Unlock()
 			writer.WriteHeader(http.StatusNoContent)
 		default:
@@ -398,8 +403,9 @@ func TestMihomoLifecycleReloadHealthLogsAndProcessGroup(t *testing.T) {
 		t.Fatalf("old runtime config survived reload: %v", err)
 	}
 	mu.Lock()
-	if len(reloadPaths) != 1 || reloadPaths[0] != second.RuntimeConfigPath {
-		t.Fatalf("reload paths = %#v", reloadPaths)
+	content, err := os.ReadFile(second.RuntimeConfigPath)
+	if err != nil || len(reloadConfigs) != 1 || reloadConfigs[0] != string(content) {
+		t.Fatalf("reload did not send the prepared runtime: %v", err)
 	}
 	mu.Unlock()
 

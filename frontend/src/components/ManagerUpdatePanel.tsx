@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react'
 import { APIError, request } from '../api'
 import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
-import { boxctlUpdateURL, formatBoxctlVersion } from '../components/BoxctlVersion'
-import { ErrorPanel, Loading, PageHeader } from '../components/Common'
+import { boxctlUpdateURL, formatBoxctlVersion } from './BoxctlVersion'
+import { ErrorPanel, Loading } from './Common'
 import type { ManagerUpdateJob, ManagerUpdateView } from '../types'
 
-export function ManagerUpdatePage() {
+export function ManagerUpdatePanel() {
   const { t } = useI18n()
   const query = useQuery<ManagerUpdateView>('/manager/update')
   const [view, setView] = useState<ManagerUpdateView>()
@@ -57,11 +57,9 @@ export function ManagerUpdatePage() {
     }
   }
 
-  return <>
-    <PageHeader title={t('boxctlUpdates')} />
-    <section className="du-card panel settings-section" aria-labelledby="boxctl-update-title">
+  return <section id="boxctl-update" className="settings-section" aria-labelledby="boxctl-update-title">
       <div className="title-row">
-        <div><h2 id="boxctl-update-title">boxctl</h2><small>{t('boxctlUpdateHint')}</small></div>
+        <div><h2 id="boxctl-update-title">{t('boxctlUpdates')}</h2><small>{t('boxctlUpdateHint')}</small></div>
       </div>
       {view && <div className="title-row">
         <div>
@@ -90,7 +88,6 @@ export function ManagerUpdatePage() {
       {query.error && !active && !uncertain && <ErrorPanel error={query.error} onRetry={query.reload} />}
       {error && !active && !uncertain && <ErrorPanel error={error} />}
     </section>
-  </>
 }
 
 export function managerUpdatePending(job?: ManagerUpdateJob): boolean { return job?.state === 'queued' || job?.state === 'running' }

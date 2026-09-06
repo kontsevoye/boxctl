@@ -310,7 +310,9 @@ assert_process_identity() {
 		.prepared.engine == $engine and .prepared.binaryPath == $binary and
 		.prepared.runtimeConfigPath == $runtime and
 		(if $engine == "mihomo" then
-			.argv == [$binary, "-d", $root, "-f", $runtime] and
+			# Hot reload replaces prepared config, while the process retains its original argv.
+			(.argv | length) == 5 and .argv[0:4] == [$binary, "-d", $root, "-f"] and
+			(.argv[4] | startswith("/tmp/boxctl-mihomo-") and endswith("/mihomo-runtime.yaml") and (split("/") | length) == 4) and
 			.prepared.args == ["-d", $root, "-f", $runtime]
 		else
 			.argv == [$binary, "run", "-D", $root, "-c", $runtime] and
@@ -647,6 +649,42 @@ mkdir -p "${output}/manager-crash-traffic"
 "$input/guest/traffic.sh" "${output}/manager-crash-traffic" "$manager_pid" "$core_pid" || \
 	die 'captured or direct traffic failed after manager crash recovery'
 
+note 'checking repeated core API hot reload with runtime files outside Mihomo home'
+reload_core_pid=$core_pid
+reload_core_identity=$(jq -er '.identity' "$process_state")
+jq -c '.argv' "$process_state" >"${output}/hot-reload-original-argv.json"
+for reload_attempt in 1 2; do
+	previous_runtime=$(jq -er '.prepared.runtimeConfigPath' "$process_state")
+	curl --fail --silent --show-error --max-time 60 --cookie "$cookie_jar" \
+		-H "X-CSRF-Token: $csrf_token" -X POST "$api/core/reload" >"${output}/core-hot-reload-${reload_attempt}.json" || \
+		die 'Mihomo core API hot reload failed'
+	[ "$(exact_pid "$mihomo_binary")" = "$reload_core_pid" ] || die 'hot reload restarted Mihomo'
+	[ "$(jq -er '.identity' "$process_state")" = "$reload_core_identity" ] || die 'hot reload changed Mihomo process identity'
+	[ "$(jq -er '.prepared.runtimeConfigPath' "$process_state")" != "$previous_runtime" ] || die 'hot reload did not adopt the new runtime'
+	[ ! -e "$previous_runtime" ] || die 'hot reload leaked the previous runtime'
+	assert_process_identity mihomo "$mihomo_binary" "$reload_core_pid" "mihomo-hot-reload-${reload_attempt}"
+	assert_engine_dataplane mihomo "mihomo-hot-reload-${reload_attempt}"
+	assert_dns_upstream "mihomo-hot-reload-${reload_attempt}"
+done
+jq -c '.argv' "$process_state" >"${output}/hot-reload-current-argv.json"
+cmp "${output}/hot-reload-original-argv.json" "${output}/hot-reload-current-argv.json" >/dev/null || die 'hot reload rewrote the original argv'
+
+note 'checking adoption of a hot-reloaded core after a manager crash'
+crashed_manager_pid=$manager_pid
+kill -KILL "$crashed_manager_pid"
+wait_replacement_manager "$crashed_manager_pid" || die 'manager did not respawn after hot reload'
+wait_management_authentication || die 'management login did not recover after hot reload'
+wait_managed_engine mihomo "$mihomo_binary" "$mihomo_profile" || die 'hot-reloaded Mihomo was not adopted'
+core_pid=$(exact_pid "$mihomo_binary")
+[ "$core_pid" = "$reload_core_pid" ] || die 'adoption restarted the hot-reloaded core'
+[ "$(jq -er '.identity' "$process_state")" = "$reload_core_identity" ] || die 'adoption replaced the hot-reloaded process identity'
+assert_process_identity mihomo "$mihomo_binary" "$core_pid" mihomo-hot-reload-adopted
+assert_engine_dataplane mihomo mihomo-hot-reload-adopted
+assert_dns_upstream mihomo-hot-reload-adopted
+mkdir -p "${output}/hot-reload-traffic"
+"$input/guest/traffic.sh" "${output}/hot-reload-traffic" "$manager_pid" "$core_pid" || \
+	die 'captured or direct traffic failed after hot reload and adoption'
+
 note 'checking stop and second start'
 /etc/init.d/boxctl stop
 assert_stopped
@@ -714,5 +752,5 @@ note 'checking final cleanup'
 /etc/init.d/boxctl stop
 assert_stopped
 assert_dns_restored final-stop
-printf 'service_start=true\npassword_login=true\nstatus_resources=true\nengine_profiles=true\ndns_upstream=true\nmihomo_traffic=true\nsing_box_switch=true\nsing_box_identity=true\nsing_box_traffic=true\nmihomo_return=true\nmanager_crash_recovery=true\nservice_restart=true\nservice_reload=true\npanel_firewall_recovery=true\nstale_startup_cleanup=true\ncleanup=true\n' >"${output}/result.txt"
+printf 'service_start=true\npassword_login=true\nstatus_resources=true\nengine_profiles=true\ndns_upstream=true\nmihomo_traffic=true\nsing_box_switch=true\nsing_box_identity=true\nsing_box_traffic=true\nmihomo_return=true\nmanager_crash_recovery=true\ncore_hot_reload=true\nhot_reload_adoption=true\nservice_restart=true\nservice_reload=true\npanel_firewall_recovery=true\nstale_startup_cleanup=true\ncleanup=true\n' >"${output}/result.txt"
 note 'all integration checks passed'

@@ -14,7 +14,6 @@ import { ProxiesPage } from './pages/ProxiesPage'
 import { RulesPage } from './pages/RulesPage'
 import { RuleListsPage } from './pages/RuleListsPage'
 import { SettingsPage } from './pages/SettingsPage'
-import { ManagerUpdatePage } from './pages/ManagerUpdatePage'
 import { StatusPage } from './pages/StatusPage'
 import { legacyEngine, normalizeEngines } from './engines'
 import type { AdminSetupStatus, Capabilities, EngineInfo, Session } from './types'
@@ -126,9 +125,9 @@ function renderRoute(route: Route) {
     case '/profiles': return <ConfigurationPage initialTab="profiles" />
     case '/config': return <ConfigurationPage />
     case '/rule-lists': return <RuleListsPage />
-    case '/backups': return <BackupsRedirect />
+    case '/backups': return <SettingsRedirect />
     case '/settings': return <SettingsPage />
-    case '/updates': return <ManagerUpdatePage />
+    case '/updates': return <SettingsRedirect />
     case '/proxies': return <ProxiesPage />
     case '/connections': return <ConnectionsPage />
     case '/rules': return <RulesPage />
@@ -139,7 +138,7 @@ function renderRoute(route: Route) {
   }
 }
 
-function BackupsRedirect() {
+function SettingsRedirect() {
   useEffect(() => navigate('/settings', true), [])
   return <Loading />
 }

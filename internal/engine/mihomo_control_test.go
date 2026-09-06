@@ -81,10 +81,11 @@ func TestMihomoControllerControlPlane(t *testing.T) {
 				return
 			}
 			var payload struct {
-				Path string `json:"path"`
+				Path    string `json:"path"`
+				Payload string `json:"payload"`
 			}
-			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.Path != "/runtime/config.yaml" {
-				http.Error(writer, "bad reload path", http.StatusBadRequest)
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.Path != "" || payload.Payload != "mode: rule\n" {
+				http.Error(writer, "bad reload payload", http.StatusBadRequest)
 				return
 			}
 			writer.WriteHeader(http.StatusNoContent)
@@ -157,12 +158,20 @@ func TestMihomoControllerControlPlane(t *testing.T) {
 	if err := client.SetRoutingMode(ctx, RoutingMode("script")); err == nil {
 		t.Fatal("SetRoutingMode() accepted unsupported mode")
 	}
-	if err := client.Reload(ctx, "/runtime/config.yaml"); err != nil {
+	if err := client.Reload(ctx, []byte("mode: rule\n")); err != nil {
 		t.Fatalf("Reload() error = %v", err)
+	}
+	for _, invalid := range [][]byte{nil, []byte(" \n\t"), []byte(strings.Repeat("x", maxControllerResponse+1))} {
+		if err := client.Reload(ctx, invalid); err == nil {
+			t.Fatalf("Reload() accepted invalid config of %d bytes", len(invalid))
+		}
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
+	if requests[http.MethodPut+" /configs"] != 1 {
+		t.Errorf("invalid reload config reached the core: %#v", requests)
+	}
 	if requests[http.MethodPut+" /proxies/group%2F%F0%9F%98%80"] != 1 {
 		t.Errorf("selection path was not escaped: %#v", requests)
 	}

@@ -29,6 +29,9 @@ OpenWrt dataplane.
 - separate traffic, connection, CPU, and memory metrics for boxctl and the
   active proxy core.
 
+Planned improvements, including local device aliases, are tracked in
+[the roadmap](docs/roadmap.md).
+
 boxctl targets OpenWrt systems using `firewall4`, `procd`, `nftables`, and
 `ip-full`. The installer does not import another routing manager's state. A
 fresh installation creates an isolated `/opt/boxctl` root; rerunning the
@@ -148,8 +151,10 @@ The binary is written to `dist/boxctl-linux-arm64`; the bundle is written to
 The integration suite installs one boxctl instance with Mihomo and sing-box in
 a clean OpenWrt VM. It checks engine-tagged profile selection, live
 Mihomo-to-sing-box-to-Mihomo cutover, exact process/listener identity, the
-`procd` lifecycle, real `nftables` and policy-routing rules, TPROXY traffic
-through both engines, a direct neighbouring Mihomo flow, and shutdown cleanup:
+`procd` lifecycle, repeated Mihomo API hot reload and subsequent adoption
+without replacing the core process, real `nftables` and policy-routing rules,
+TPROXY traffic through both engines, a direct neighbouring Mihomo flow, and
+shutdown cleanup:
 
 ```sh
 nix develop --command tests/integration/run.sh \
@@ -330,9 +335,9 @@ boxctl version
 
 ## Self-update and releases
 
-The web menu's **boxctl update** page shows the running and latest stable
+The **boxctl update** section in web **Settings** shows the running and latest stable
 versions, checks GitHub on demand, and installs an available update. The version
-indicator in the sidebar also opens this page. Compatible updates preserve the
+indicator in the sidebar also opens Settings. Compatible updates preserve the
 active core; incompatible updates require a separate confirmation in the GUI
 before interrupting connections.
 

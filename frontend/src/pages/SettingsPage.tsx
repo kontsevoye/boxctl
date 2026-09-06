@@ -6,6 +6,7 @@ import { ChoiceField } from '../components/ChoiceField'
 import { ErrorPanel, Loading, PageHeader } from '../components/Common'
 import { BoxctlVersion } from '../components/BoxctlVersion'
 import { Toast } from '../components/Toast'
+import { ManagerUpdatePanel } from '../components/ManagerUpdatePanel'
 import { ExternalDashboardPanel } from '../components/ExternalDashboardPanel'
 import { useFallbackQuery, useQuery } from '../hooks'
 import { useI18n } from '../i18n'
@@ -131,6 +132,7 @@ export function SettingsPage() {
       <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.startOnBoot} onChange={(event) => update('startOnBoot', event.currentTarget.checked)} /><span>{t('startOnBoot')}</span></label>
       <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.coreRestartGuard ?? false} disabled={!form.coreRestartGuardSupported && !form.coreRestartGuard} onChange={(event) => update('coreRestartGuard', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('coreRestartGuard')}</span><small>{t('coreRestartGuardHint')}</small>{!form.coreRestartGuardSupported && <small>{t('coreRestartGuardUnavailable')}</small>}</span></label>
 		<label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoUpdate ?? false} onChange={(event) => update('autoUpdate', event.currentTarget.checked)} /><span>{t('autoUpdate')}</span></label>
+      <ManagerUpdatePanel />
 		<div className="settings-section">
 			<h2>{t('engineUpdates')}</h2>
         {engines.filter((engine) => engine.management.updates).map((engine) => <EngineUpdatePanel key={engine.id} engine={engine} capabilities={capabilities} refreshCapabilities={refreshCapabilities} onMessage={setMessage} onError={setError} />)}

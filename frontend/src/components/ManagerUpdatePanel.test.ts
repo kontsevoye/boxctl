@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { managerUpdatePending, mergeManagerUpdateView } from './ManagerUpdatePage'
+import { managerUpdatePending, mergeManagerUpdateView } from './ManagerUpdatePanel'
 import type { ManagerUpdateJob } from '../types'
 
 describe('manager update polling', () => {

@@ -7,6 +7,11 @@ import type { Capabilities } from '../types'
 import { canShowNavigationItem, coreControlAvailability, navigationItems, Shell } from './Shell'
 
 describe('navigationItems', () => {
+  it('keeps manager updates inside Settings without a separate menu item', () => {
+    const items = navigationItems((key) => key)
+    expect(items.some((item) => item.route === '/settings')).toBe(true)
+    expect(items.some((item) => item.route === '/updates')).toBe(false)
+  })
   it('exposes one configuration workspace instead of separate profile and editor entries', () => {
     const items = navigationItems((key) => key)
     expect(items.filter((item) => item.route === '/config')).toHaveLength(1)

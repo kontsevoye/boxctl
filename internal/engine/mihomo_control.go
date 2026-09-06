@@ -74,11 +74,15 @@ func (c *MihomoController) Version(ctx context.Context) (string, error) {
 	return response.Version, nil
 }
 
-func (c *MihomoController) Reload(ctx context.Context, runtimeConfigPath string) error {
+// Reload uses Mihomo's native inline-config API. A manager-owned runtime can
+// live outside Mihomo's home (notably in /tmp), where the path API rejects it.
+func (c *MihomoController) Reload(ctx context.Context, runtimeConfig []byte) error {
+	if len(bytes.TrimSpace(runtimeConfig)) == 0 || len(runtimeConfig) > maxControllerResponse {
+		return errors.New("mihomo reload config is empty or exceeds size limit")
+	}
 	payload := struct {
-		Path    string `json:"path"`
 		Payload string `json:"payload"`
-	}{Path: runtimeConfigPath}
+	}{Payload: string(runtimeConfig)}
 	query := url.Values{"force": []string{"true"}}
 	return c.doJSON(ctx, http.MethodPut, "/configs", query, payload, nil, http.StatusOK, http.StatusNoContent)
 }

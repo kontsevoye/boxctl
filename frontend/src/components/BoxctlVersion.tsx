@@ -31,7 +31,7 @@ export function BoxctlVersion({ className = '' }: { className?: string }) {
       <span>boxctl</span>
       <strong>{version}</strong>
     </span>
-    {update && <a className="boxctl-update-link" href="/updates" onClick={(event) => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); navigate('/updates') } }} title={updateLabel} aria-label={updateLabel}>
+    {update && <a className="boxctl-update-link" href="/settings" onClick={(event) => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); navigate('/settings') } }} title={updateLabel} aria-label={updateLabel}>
       <CircleArrowUp size={17} strokeWidth={2} aria-hidden="true" />
     </a>}
   </div>
