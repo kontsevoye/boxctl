@@ -46,8 +46,8 @@ switch against the exact adopted runtime revision on the next start.
 
 sing-box does not expose Mihomo's proxy-provider or rule-provider management
 semantics. boxctl therefore keeps proxy subscriptions, local rule-list surgery,
-fake-IP list generation, and external Zashboard explicitly Mihomo-only instead
-of presenting operations that cannot affect a sing-box runtime. Native
+and fake-IP list generation explicitly Mihomo-only instead of presenting
+operations that cannot affect a sing-box runtime. Native
 sing-box `outbounds` and `route.rule_set` remain editable in its JSON profile;
 the integrated proxies, rules, connections, traffic, and log pages use its
 loopback Clash API adapter. Remote sing-box profile refreshes are staged as
@@ -247,9 +247,9 @@ control. If an administrator then chooses to install it, boxctl downloads
 checks archive paths and extraction limits, and publishes it atomically. The
 digest verifies the downloaded release asset; it is not a reproducible-build
 or source-code audit. Zashboard is third-party browser code with access to the
-proxied Mihomo API, so review its upstream source and license before enabling
-it. Controller credentials remain server-side and are added only to requests
-proxied by boxctl.
+proxied API of the running Clash-compatible core, so review its upstream source
+and license before enabling it. Controller credentials remain server-side and
+are added only to requests proxied by boxctl.
 
 ## Known limitations
 
@@ -266,9 +266,10 @@ proxied by boxctl.
 - In DNS `upstream` mode, sing-box profiles must carry a non-system recursive
   DNS transport; profiles without explicit `dns.servers` can instead use
   `redirect` or `disabled` mode when the native resolver design requires it.
-- The optional Zashboard integration remains Mihomo-only; sing-box capabilities
-  are exposed through boxctl's normalized engine API instead of pretending its
-  Clash-compatible API implements every Mihomo dashboard endpoint.
+- Zashboard can use sing-box's Clash API for proxies, selectors, delay tests,
+  rules, connections, traffic, and logs. Provider management, hot reload, and
+  mutable routing mode are not advertised for sing-box because its API does not
+  implement the corresponding Mihomo behavior.
 
 ## CLI
 

@@ -180,7 +180,7 @@ func (service *CoreService) Capabilities(ctx context.Context) (web.Capabilities,
 	snapshot := service.lifecycleView()
 	engineName := service.name(snapshot)
 	mihomoResources := engineName == state.EngineMihomo
-	externalDashboard := service.unsafeExternalDashboard && mihomoResources
+	externalDashboard := service.unsafeExternalDashboard && supportsClashExternalDashboard(engineName)
 	return web.Capabilities{
 		CoreName:    service.name(snapshot),
 		CoreVersion: snapshot.health.Version,

@@ -8,9 +8,13 @@ describe('settings update payload', () => {
 		expect(externalDashboardEnabled(capabilities)).toBe(false)
 		expect(externalDashboardEnabled({ ...capabilities, features: { externalDashboard: true } })).toBe(true)
 		expect(externalDashboardEnabled({ ...capabilities, features: { externalDashboard: true } }, {
-      id: 'sing-box', displayName: 'sing-box', configFormat: 'json', extensions: ['.json'], installed: true, compatible: true, selected: true, running: true, supportedCaptureModes: [],
-      management: { remoteProfiles: true, proxySubscriptions: true, localRuleLists: true, fakeIPCapture: true, updates: true, externalDashboard: true },
-    })).toBe(false)
+	      id: 'sing-box', displayName: 'sing-box', configFormat: 'json', extensions: ['.json'], installed: true, compatible: true, selected: true, running: true, supportedCaptureModes: [],
+	      management: { remoteProfiles: true, proxySubscriptions: true, localRuleLists: true, fakeIPCapture: true, updates: true, externalDashboard: true },
+	    })).toBe(true)
+		expect(externalDashboardEnabled({ ...capabilities, features: { externalDashboard: true } }, {
+	      id: 'sing-box', displayName: 'sing-box', configFormat: 'json', extensions: ['.json'], installed: true, compatible: true, selected: true, running: true, supportedCaptureModes: [],
+	      management: { remoteProfiles: true, proxySubscriptions: true, localRuleLists: true, fakeIPCapture: true, updates: true, externalDashboard: false },
+	    })).toBe(false)
 	})
 
 	it('enables dashboard install/update only when an action is available', () => {

@@ -70,11 +70,11 @@ func (service *EngineCatalogService) Engines(ctx context.Context) ([]web.EngineI
 		result[index].SupportedCaptureModes = append([]string(nil), allCaptureModes...)
 		result[index].Management.RemoteProfiles = true
 		result[index].Management.Updates = true
+		result[index].Management.ExternalDashboard = service.UnsafeExternalDashboard && supportsClashExternalDashboard(result[index].ID)
 		if result[index].ID == state.EngineMihomo {
 			result[index].Management.ProxySubscriptions = true
 			result[index].Management.LocalRuleLists = true
 			result[index].Management.FakeIPCapture = true
-			result[index].Management.ExternalDashboard = service.UnsafeExternalDashboard
 		}
 		if result[index].ID == state.EngineSingBox && result[index].Version == "" && singMeta.Version != "" {
 			result[index].Version = singMeta.Version

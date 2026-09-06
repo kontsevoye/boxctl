@@ -273,8 +273,7 @@ export function canManageExternalDashboard(status?: ExternalDashboardStatus): bo
 }
 
 export function externalDashboardEnabled(capabilities: Capabilities, engine?: EngineInfo): boolean {
-  return (engine?.id ?? capabilities.coreName) === 'mihomo'
-    && (engine ? engine.management.externalDashboard : capabilities.features?.externalDashboard === true)
+  return engine ? engine.management.externalDashboard : capabilities.features?.externalDashboard === true
 }
 
 export function settingsUpdatePayload(form: Settings, listText: Record<ListField, string>) {

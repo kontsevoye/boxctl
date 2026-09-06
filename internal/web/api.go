@@ -586,8 +586,8 @@ type EngineUpdateService interface {
 }
 
 // ExternalDashboardStatus describes the optional on-disk Clash dashboard.
-// Release URLs, checksums, filesystem paths, and the Mihomo controller secret
-// deliberately remain server-side.
+// Release URLs, checksums, filesystem paths, and the active core controller
+// secret deliberately remain server-side.
 type ExternalDashboardStatus struct {
 	Name              string `json:"name"`
 	Installed         bool   `json:"installed"`

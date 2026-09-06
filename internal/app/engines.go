@@ -24,6 +24,12 @@ type committedProfileStatePublisher interface {
 	PublishProfileState(context.Context, state.ActiveProfile, string) error
 }
 
+// ActiveControllerProvider exposes a loopback controller target without
+// revealing it through any browser-facing DTO.
+type ActiveControllerProvider interface {
+	ActiveControllerEndpoint() (engine.ControllerEndpoint, error)
+}
+
 // EnginePreparer dispatches native preparation by the engine recorded on the
 // profile. The active profile remains the sole persisted engine selection.
 type EnginePreparer struct {
@@ -193,6 +199,22 @@ func (host *EngineHost) RunningEngine() string {
 	host.mu.RLock()
 	defer host.mu.RUnlock()
 	return host.running
+}
+
+// ActiveControllerEndpoint returns only the controller owned by the live
+// generation.  The selected profile is deliberately ignored: during a safe
+// profile switch it can briefly differ from the process which actually owns
+// the Clash-compatible API listener.
+func (host *EngineHost) ActiveControllerEndpoint() (engine.ControllerEndpoint, error) {
+	backend, _, err := host.runningBackend()
+	if err != nil {
+		return engine.ControllerEndpoint{}, err
+	}
+	provider, ok := backend.(ActiveControllerProvider)
+	if !ok {
+		return engine.ControllerEndpoint{}, engine.ErrUnsupported
+	}
+	return provider.ActiveControllerEndpoint()
 }
 
 func (host *EngineHost) RuntimeEpoch() uint64 { return host.epoch.Load() }

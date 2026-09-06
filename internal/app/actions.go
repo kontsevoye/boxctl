@@ -1313,12 +1313,12 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		}
 		services.CoreUpdates = updates
 		if options.UnsafeExternalDashboard {
-			dashboardManager, dashboardErr := NewExternalDashboardManager(root, &http.Client{Timeout: 90 * time.Second}, mihomoDriver)
+			dashboardManager, dashboardErr := NewExternalDashboardManager(root, &http.Client{Timeout: 90 * time.Second}, host)
 			if dashboardErr != nil {
 				_ = coreService.Close()
 				return nil, dashboardErr
 			}
-			dashboard := mihomoExternalDashboard{
+			dashboard := clashExternalDashboard{
 				manager:  dashboardManager,
 				selected: func() string { return selectedProfileEngine(mihomoPreparer.Profiles) },
 			}

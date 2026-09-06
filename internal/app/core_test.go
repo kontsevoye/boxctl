@@ -305,7 +305,7 @@ func TestCoreServiceCapabilitiesFollowSelectedEngineWhileStopped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if singBoxCapabilities.CoreName != state.EngineSingBox || singBoxCapabilities.Pages["ruleLists"] || singBoxCapabilities.Features["externalDashboard"] {
+	if singBoxCapabilities.CoreName != state.EngineSingBox || singBoxCapabilities.Pages["ruleLists"] || !singBoxCapabilities.Features["externalDashboard"] {
 		t.Fatalf("stopped sing-box capabilities = %+v", singBoxCapabilities)
 	}
 }

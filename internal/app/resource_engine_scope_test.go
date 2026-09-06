@@ -255,7 +255,7 @@ func TestEngineCatalogAdvertisesOnlyImplementedResourceManagement(t *testing.T) 
 		t.Fatalf("Mihomo management capabilities = %+v", mihomo)
 	}
 	singBox := byID[state.EngineSingBox].Management
-	if !singBox.RemoteProfiles || !singBox.Updates || singBox.ProxySubscriptions || singBox.LocalRuleLists || singBox.FakeIPCapture || singBox.ExternalDashboard {
+	if !singBox.RemoteProfiles || !singBox.Updates || !singBox.ExternalDashboard || singBox.ProxySubscriptions || singBox.LocalRuleLists || singBox.FakeIPCapture {
 		t.Fatalf("sing-box management capabilities overclaim support = %+v", singBox)
 	}
 }

@@ -68,8 +68,9 @@ type externalDashboardTarget func() (engine.ControllerEndpoint, error)
 
 // ExternalDashboardManager downloads a digest-attested Zashboard release into
 // root/ui and serves it next to a same-origin proxy for the loopback-only
-// Mihomo controller. Controller credentials are injected only into proxied
-// requests and never enter a web API response or browser URL.
+// controller of the active Clash-compatible engine. Controller credentials
+// are injected only into proxied requests and never enter a web API response
+// or browser URL.
 type ExternalDashboardManager struct {
 	Layout           state.Layout
 	Source           externalDashboardReleaseSource
@@ -85,7 +86,7 @@ type ExternalDashboardManager struct {
 	contentMu sync.RWMutex
 }
 
-func NewExternalDashboardManager(root string, client *http.Client, driver *engine.MihomoDriver) (*ExternalDashboardManager, error) {
+func NewExternalDashboardManager(root string, client *http.Client, provider ActiveControllerProvider) (*ExternalDashboardManager, error) {
 	layout, err := state.NewLayout(root)
 	if err != nil {
 		return nil, err
@@ -99,8 +100,8 @@ func NewExternalDashboardManager(root string, client *http.Client, driver *engin
 		Client: client,
 		Now:    time.Now,
 	}
-	if driver != nil {
-		manager.ControllerTarget = driver.ActiveControllerEndpoint
+	if provider != nil {
+		manager.ControllerTarget = provider.ActiveControllerEndpoint
 	}
 	if err := manager.recoverInterruptedPublish(); err != nil {
 		return nil, err
@@ -776,18 +777,18 @@ func addDashboardManifestCredentials(content []byte) []byte {
 
 func (manager *ExternalDashboardManager) serveController(w http.ResponseWriter, r *http.Request) {
 	if manager.ControllerTarget == nil {
-		http.Error(w, "Mihomo controller is unavailable", http.StatusServiceUnavailable)
+		http.Error(w, "Core controller is unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	endpoint, err := manager.ControllerTarget()
 	if err != nil {
-		http.Error(w, "Mihomo controller is unavailable", http.StatusServiceUnavailable)
+		http.Error(w, "Core controller is unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	target, err := url.Parse(endpoint.BaseURL)
 	if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil ||
 		target.RawQuery != "" || target.Fragment != "" || !isLoopbackControllerHost(target.Hostname()) {
-		http.Error(w, "Mihomo controller is unavailable", http.StatusServiceUnavailable)
+		http.Error(w, "Core controller is unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if !isWebSocketRequest(r) {
@@ -819,7 +820,7 @@ func (manager *ExternalDashboardManager) serveController(w http.ResponseWriter, 
 		return nil
 	}
 	proxy.ErrorHandler = func(response http.ResponseWriter, _ *http.Request, _ error) {
-		http.Error(response, "Mihomo controller is unavailable", http.StatusBadGateway)
+		http.Error(response, "Core controller is unavailable", http.StatusBadGateway)
 	}
 	proxy.FlushInterval = -1
 	proxy.ServeHTTP(w, r)
