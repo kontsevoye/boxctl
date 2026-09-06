@@ -282,7 +282,7 @@ func Execute(ctx context.Context, args []string, streams Streams, actions Action
 			fs.StringVar(&options.File, "file", "", "install from a local raw Linux/AArch64 binary")
 			fs.StringVar(&options.SHA256, "sha256", "", "expected local file SHA-256; defaults to FILE.sha256")
 			fs.BoolVar(&options.NoRestart, "no-restart", false, "install the binary without restarting boxctl")
-			fs.BoolVar(&options.FullRestart, "full-restart", false, "restart boxctl and Mihomo; also approve a required compatibility restart")
+			fs.BoolVar(&options.FullRestart, "full-restart", false, "restart boxctl and the active proxy core; also approve a required compatibility restart")
 			if err := parse(fs, args[2:]); err != nil {
 				return err
 			}
@@ -293,7 +293,7 @@ func Execute(ctx context.Context, args []string, streams Streams, actions Action
 			fs := newFlagSet("self-update rollback", streams.Err)
 			fs.StringVar(&options.Root, "root", state.DefaultRoot, "boxctl data root")
 			fs.BoolVar(&options.NoRestart, "no-restart", false, "restore the previous binary without restarting boxctl")
-			fs.BoolVar(&options.FullRestart, "full-restart", false, "restart boxctl and Mihomo; also approve a required compatibility restart")
+			fs.BoolVar(&options.FullRestart, "full-restart", false, "restart boxctl and the active proxy core; also approve a required compatibility restart")
 			if err := parse(fs, args[2:]); err != nil {
 				return err
 			}

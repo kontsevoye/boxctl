@@ -483,7 +483,7 @@ func chooseManagerRestart(current, candidate managerBuildInfo, noRestart, fullRe
 		return managerRestartFull, nil
 	}
 	if confirm == nil {
-		return managerRestartNone, fmt.Errorf("%s Re-run with --full-restart to approve restarting Mihomo", warning)
+		return managerRestartNone, fmt.Errorf("%s Re-run with --full-restart to approve restarting the active proxy core", warning)
 	}
 	approved, err := confirm(warning)
 	if err != nil {

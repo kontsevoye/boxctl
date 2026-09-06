@@ -314,7 +314,7 @@ func (actions *Actions) Serve(ctx context.Context, options cli.ServeOptions) (re
 		} else if removeErr := removeManagerHandoff(layout); removeErr != nil {
 			logger.Error("could not consume manager handoff marker", "error", removeErr)
 		} else {
-			logger.Info("self-update handoff completed; Mihomo process and active connections were preserved")
+			logger.Info("self-update handoff completed; active proxy core and connections were preserved")
 		}
 	}
 
@@ -339,7 +339,7 @@ func (actions *Actions) Serve(ctx context.Context, options cli.ServeOptions) (re
 		logger.Error("could not validate manager handoff marker; performing a full shutdown", "error", handoffErr)
 	}
 	if ownLifecycle && preserveCore && handoffErr == nil {
-		logger.Warn("self-update handoff: leaving Mihomo and the active dataplane running while only the manager restarts")
+		logger.Warn("self-update handoff: leaving the active proxy core and dataplane running while only the manager restarts")
 	} else if ownLifecycle {
 		lifecycleErr = stopLifecycleForShutdown(cleanupContext, runtimeState.Lifecycle)
 	}
