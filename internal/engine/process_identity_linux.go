@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 func captureProcessIdentity(pid int) (string, error) {
@@ -49,7 +50,7 @@ func captureProcessExecution(pid int) (identity, executable string, argv []strin
 		returnErr = fmt.Errorf("read process executable: %w", returnErr)
 		return
 	}
-	content, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	content, err := readStartedProcessCommandLine(pid)
 	if err != nil {
 		return identity, executable, nil, fmt.Errorf("read process command line: %w", err)
 	}
@@ -60,7 +61,35 @@ func captureProcessExecution(pid int) (identity, executable string, argv []strin
 	if len(parts) == 0 || parts[0] == "" {
 		return identity, executable, nil, errors.New("process command line is empty")
 	}
+	// Reading argv may have waited for exec to finish. Never combine values
+	// from different executions or accept a PID reused while we were waiting.
+	currentIdentity, err := captureProcessIdentity(pid)
+	if err != nil {
+		return identity, executable, nil, err
+	}
+	currentExecutable, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return identity, executable, nil, err
+	}
+	if currentIdentity != identity || currentExecutable != executable {
+		return identity, executable, nil, errors.New("process execution changed while reading command line")
+	}
 	return identity, executable, parts, nil
+}
+
+func readStartedProcessCommandLine(pid int) ([]byte, error) {
+	// Linux closes the exec error pipe before its new mm has env_end set.
+	// During that window /proc/<pid>/cmdline legitimately returns zero bytes,
+	// even though exec.Cmd.Start has succeeded. Only retry that empty read;
+	// malformed argv and all filesystem errors still fail closed.
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for {
+		content, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+		if err != nil || len(content) != 0 || !time.Now().Before(deadline) {
+			return content, err
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func validatePersistedProcessExecution(pid int, identity, executable string, argv []string, binary string) error {
