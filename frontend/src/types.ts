@@ -62,6 +62,20 @@ export interface ManagerUpdateStatus {
   checkFailed?: boolean
 }
 
+export interface ManagerUpdateJob {
+  id: string
+  state: 'queued' | 'running' | 'succeeded' | 'failed' | 'confirmation-required'
+  createdAt: string
+  updatedAt: string
+  currentVersion?: string
+  restartMode?: 'none' | 'manager-only' | 'full'
+  errorCode?: string
+}
+
+export interface ManagerUpdateView extends ManagerUpdateStatus {
+  job?: ManagerUpdateJob
+}
+
 export interface StatusSnapshot {
   restartGuard?: { active: boolean; reason?: string; expiresAt?: string; protectedInterfaces?: string[]; trustedInterfaces?: string[]; lastError?: string }
   healthy: boolean

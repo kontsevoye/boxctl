@@ -330,6 +330,23 @@ boxctl version
 
 ## Self-update and releases
 
+The web menu's **boxctl update** page shows the running and latest stable
+versions, checks GitHub on demand, and installs an available update. The version
+indicator in the sidebar also opens this page. Compatible updates preserve the
+active core; incompatible updates require a separate confirmation in the GUI
+before interrupting connections.
+
+The authenticated, CSRF-protected `POST /api/v1/manager/update` accepts only
+`{"allowFullRestart":false}` (or `true` after confirmation) and returns `202`
+with a job ID. `GET /api/v1/manager/update` reports cached release information
+and the durable job; `?checkUpdates=true` refreshes discovery. A one-shot
+`boxctl-update` procd service performs the verified install independently of the
+web process, including restart verification and rollback. Closing the browser
+does not cancel it. Its private `.boxctl/manager-update-job.json` survives manager
+restarts; an interrupted worker is reported as failed and never retried
+automatically after boot. Detailed failures are also visible in the GUI system
+log. Web installation is available for release builds at `/opt/boxctl`.
+
 `boxctl self-update install` discovers the latest stable release in
 `kontsevoye/boxctl`. The selected release must use a canonical
 `vYYYY.MM.N` tag and contain a raw `boxctl-linux-arm64-YYYY.MM.N` asset with

@@ -9,6 +9,7 @@ export const routes = [
   '/rule-lists',
   '/backups',
   '/settings',
+  '/updates',
   '/proxies',
   '/connections',
   '/rules',

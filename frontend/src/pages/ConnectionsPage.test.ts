@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  connectionDevices,
+  connectionSourceIP,
   displayConnectionChains,
   displayConnectionEndpoint,
   displayConnectionHost,
@@ -10,6 +12,26 @@ import {
 } from './ConnectionsPage'
 
 describe('Connections stream payload', () => {
+  it('groups source devices by IP across ports and enriches an earlier unnamed device', () => {
+    expect(connectionDevices([
+      { id: 'one', sourceIP: '192.168.69.42', sourcePort: '1000' },
+      { id: 'two', sourceIP: '192.168.69.42', sourcePort: '2000', sourceHostname: 'phone.lan' },
+      { id: 'closed', source: '[fd00::7]:53120', sourceHostname: 'macbook.lan' },
+      { id: 'inner', sourceIP: '::', sourcePort: '0' },
+    ])).toEqual([
+      { ip: 'fd00::7', label: 'macbook.lan (fd00::7)' },
+      { ip: '192.168.69.42', label: 'phone.lan (192.168.69.42)' },
+    ])
+    expect(connectionSourceIP({ id: 'fallback', source: '192.168.69.42:3000' })).toBe('192.168.69.42')
+    expect(connectionSourceIP({ id: 'ipv6', sourceIP: 'FD00::7', sourcePort: '4000' })).toBe('fd00::7')
+    expect(connectionSourceIP({ id: 'missing' })).toBe('')
+  })
+
+  it('keeps the selected device visible when its last connection leaves the history', () => {
+    const selected = { ip: '192.168.69.42', label: 'phone.lan (192.168.69.42)' }
+    expect(connectionDevices([], selected)).toEqual([selected])
+  })
+
   it('keeps the full live connection DTO', () => {
     const snapshot = parseConnectionsEvent(JSON.stringify({
       active: [{

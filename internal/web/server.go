@@ -325,6 +325,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/core", s.handleCore)
 	s.mux.HandleFunc("/api/v1/core/", s.handleCoreRoute)
 	s.mux.HandleFunc("/api/v1/external-dashboard", s.handleExternalDashboard)
+	s.mux.HandleFunc("/api/v1/manager/update", s.handleManagerUpdate)
 	s.mux.HandleFunc("/api/v1/external-dashboard/", s.handleExternalDashboardRoute)
 	s.mux.HandleFunc("/api/v1/service/", s.handleLifecycle)
 	s.mux.HandleFunc("/api/v1/firewall/cleanup", s.handleFirewallCleanup)

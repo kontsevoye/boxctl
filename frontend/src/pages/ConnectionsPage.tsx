@@ -32,6 +32,7 @@ export function ConnectionsPage() {
   const [tab, setTab] = useState<ConnectionTab>('active')
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')
+  const [sourceFilter, setSourceFilter] = useState<ConnectionDevice>()
   const [sortKey, setSortKey] = useState<SortKey>('downloadRate')
   const [descending, setDescending] = useState(true)
   const [expanded, setExpanded] = useState('')
@@ -84,6 +85,7 @@ export function ConnectionsPage() {
 
   const sourceConnections = tab === 'active' ? snapshot.active : snapshot.closed ?? []
   const types = useMemo(() => [...new Set([...snapshot.active, ...(snapshot.closed ?? [])].map(connectionType).filter((value) => value !== '—'))].sort(), [snapshot])
+  const devices = useMemo(() => connectionDevices([...snapshot.active, ...(snapshot.closed ?? [])], sourceFilter), [snapshot, sourceFilter])
   const pattern = useMemo(() => {
     if (!search.trim()) return undefined
     try { return new RegExp(search.trim(), 'i') } catch { return undefined }
@@ -92,6 +94,7 @@ export function ConnectionsPage() {
   const filtered = sourceConnections
     .filter((connection) => {
       if (typeFilter !== 'all' && connectionType(connection) !== typeFilter) return false
+      if (sourceFilter && connectionSourceIP(connection) !== sourceFilter.ip) return false
       if (!needle) return true
       const haystack = [displayConnectionHost(connection), connection.destination, connection.source, connection.sourceIP, connection.sourceHostname, connection.destinationIP, connection.dnsMode, connection.rule, connection.rulePayload, ...(connection.chains ?? [])].filter(Boolean).join(' ')
       return pattern ? pattern.test(haystack) : haystack.toLocaleLowerCase().includes(needle)
@@ -131,7 +134,8 @@ export function ConnectionsPage() {
           <button className={`du-tab ${tab === 'closed' ? 'du-tab-active' : ''}`} role="tab" aria-selected={tab === 'closed'} onClick={() => setTab('closed')}>{t('closedConnections')} <span>{snapshot.closed?.length ?? 0}</span></button>
         </div>
         <label className="proxies-search"><Search size={16} aria-hidden="true" /><input className="du-input du-input-sm" value={search} placeholder={`${t('search')} | Regex`} onInput={(event) => setSearch(event.currentTarget.value)} /></label>
-        <select className="du-select du-select-sm" value={typeFilter} onChange={(event) => setTypeFilter(event.currentTarget.value)}><option value="all">{t('allSources')}</option>{types.map((type) => <option value={type} key={type}>{type}</option>)}</select>
+        <select className="du-select du-select-sm connections-device-filter" aria-label={t('sourceDevice')} value={sourceFilter?.ip ?? ''} onChange={(event) => setSourceFilter(devices.find((device) => device.ip === event.currentTarget.value))}><option value="">{t('allDevices')}</option>{devices.map((device) => <option value={device.ip} key={device.ip}>{device.label}</option>)}</select>
+        <select className="du-select du-select-sm" aria-label={t('connectionType')} value={typeFilter} onChange={(event) => setTypeFilter(event.currentTarget.value)}><option value="all">{t('allConnectionTypes')}</option>{types.map((type) => <option value={type} key={type}>{type}</option>)}</select>
         <label className="connections-mobile-sort">
           <span className="visually-hidden">{t('sortBy')}</span>
           <select className="du-select du-select-sm" value={sortKey} onChange={(event) => changeSort(event.currentTarget.value as SortKey)}>
@@ -234,6 +238,33 @@ export function displayConnectionSource(connection: Pick<Connection, 'source' | 
   if (!address) return connection.source?.trim() || hostname
   const literal = address.includes(':') && !(address.startsWith('[') && address.endsWith(']')) ? `[${address}]` : address
   return `${hostname} (${literal})${connection.sourcePort ? `:${connection.sourcePort}` : ''}`
+}
+
+export interface ConnectionDevice { ip: string; label: string }
+
+// Source ports identify connections, not devices. Older cores may only send
+// the formatted endpoint, including bracketed IPv6 addresses.
+export function connectionSourceIP(connection: Connection): string {
+  const endpoint = connection.source?.trim() ?? ''
+  const address = connection.sourceIP?.trim()
+    || endpoint.match(/^\[([^\]]+)\](?::\d+)?$/)?.[1]
+    || (/^[^:]+:\d+$/.test(endpoint) ? endpoint.slice(0, endpoint.lastIndexOf(':')) : endpoint)
+  const ip = address.replace(/^\[|\]$/g, '').toLowerCase()
+  return ['', '—', '0.0.0.0', '::', '::0', '0:0:0:0:0:0:0:0'].includes(ip) ? '' : ip
+}
+
+export function connectionDevices(connections: Connection[], selected?: ConnectionDevice): ConnectionDevice[] {
+  const devices = new Map<string, ConnectionDevice>()
+  if (selected) devices.set(selected.ip, selected)
+  for (const connection of connections) {
+    const ip = connectionSourceIP(connection)
+    if (!ip) continue
+    const hostname = connection.sourceHostname?.trim()
+    if (!devices.has(ip) || (hostname && devices.get(ip)?.label === ip)) {
+      devices.set(ip, { ip, label: hostname ? `${hostname} (${ip})` : ip })
+    }
+  }
+  return [...devices.values()].sort((left, right) => left.label.localeCompare(right.label, undefined, { numeric: true }))
 }
 
 export function mergeConnectionSnapshots(previous: ConnectionStreamSnapshot, next: ConnectionStreamSnapshot): ConnectionStreamSnapshot {

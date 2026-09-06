@@ -14,6 +14,7 @@ import { ProxiesPage } from './pages/ProxiesPage'
 import { RulesPage } from './pages/RulesPage'
 import { RuleListsPage } from './pages/RuleListsPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { ManagerUpdatePage } from './pages/ManagerUpdatePage'
 import { StatusPage } from './pages/StatusPage'
 import { legacyEngine, normalizeEngines } from './engines'
 import type { AdminSetupStatus, Capabilities, EngineInfo, Session } from './types'
@@ -25,6 +26,7 @@ const routeCapabilities: Partial<Record<Route, string | string[]>> = {
   '/rule-lists': 'ruleLists',
   '/backups': 'settings',
   '/settings': 'settings',
+  '/updates': 'settings',
   '/proxies': 'proxies',
   '/connections': 'connections',
   '/rules': 'rules',
@@ -126,6 +128,7 @@ function renderRoute(route: Route) {
     case '/rule-lists': return <RuleListsPage />
     case '/backups': return <BackupsRedirect />
     case '/settings': return <SettingsPage />
+    case '/updates': return <ManagerUpdatePage />
     case '/proxies': return <ProxiesPage />
     case '/connections': return <ConnectionsPage />
     case '/rules': return <RulesPage />

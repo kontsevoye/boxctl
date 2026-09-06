@@ -45,6 +45,7 @@ type SelfUpdateOptions struct {
 	Repository         string
 	File               string
 	SHA256             string
+	JobID              string
 	NoRestart          bool
 	FullRestart        bool
 	ConfirmFullRestart func(string) (bool, error)
@@ -268,6 +269,17 @@ func Execute(ctx context.Context, args []string, streams Streams, actions Action
 		}
 		options := SelfUpdateOptions{Action: args[1], Root: state.DefaultRoot, Repository: "kontsevoye/boxctl"}
 		switch options.Action {
+		case "worker":
+			// Internal procd entry point: all update parameters come from the
+			// private job record, never from a shell or HTTP-provided path.
+			fs := newFlagSet("self-update worker", streams.Err)
+			fs.StringVar(&options.JobID, "job-id", "", "queued web update job")
+			if err := parse(fs, args[2:]); err != nil {
+				return err
+			}
+			if options.JobID == "" {
+				return usage("--job-id is required")
+			}
 		case "check":
 			fs := newFlagSet("self-update check", streams.Err)
 			fs.StringVar(&options.Root, "root", state.DefaultRoot, "boxctl data root")

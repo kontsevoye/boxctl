@@ -27,6 +27,7 @@ export function navigationItems(t: (key: string) => string): NavItem[] {
     { route: '/config', label: t('configuration'), capabilities: ['profiles'], icon: FileCode2 },
     { route: '/rule-lists', label: t('ruleLists'), capabilities: ['ruleLists'], icon: ListTree },
     { route: '/settings', label: t('settings'), capabilities: ['settings'], icon: Settings },
+    { route: '/updates', label: t('boxctlUpdates'), capabilities: ['settings'], icon: RefreshCw },
     { route: '/proxies', label: t('proxies'), capabilities: ['proxies'], icon: Waypoints },
     { route: '/connections', label: t('connections'), capabilities: ['connections'], icon: Network },
     { route: '/rules', label: t('rules'), capabilities: ['rules'], icon: ListTree },
@@ -72,6 +73,8 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
   const controls = coreControlAvailability(coreState)
   const coreName = status.data?.core.name || capabilities.coreName
   const coreVersion = status.data?.core.version || capabilities.coreVersion
+
+  useEffect(() => { setDrawerOpen(false) }, [route])
 
   useEffect(() => {
     const timer = window.setInterval(status.reload, 2_000)

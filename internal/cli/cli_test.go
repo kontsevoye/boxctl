@@ -324,6 +324,14 @@ func TestSelfUpdateCommandsAreExplicitlyParsed(t *testing.T) {
 	if !recorder.update.FullRestart || recorder.update.ConfirmFullRestart == nil {
 		t.Fatalf("full self-update install = %#v", recorder.update)
 	}
+
+	recorder = &actionRecorder{}
+	if err := Execute(context.Background(), []string{"self-update", "worker", "--job-id", "0123456789abcdef0123456789abcdef"}, Streams{}, recorder); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.called != "self-update:worker" || recorder.update.JobID != "0123456789abcdef0123456789abcdef" || recorder.update.Root != state.DefaultRoot {
+		t.Fatalf("worker command = %#v", recorder.update)
+	}
 }
 
 func TestSelfUpdateRejectsAmbiguousOrUnknownInput(t *testing.T) {

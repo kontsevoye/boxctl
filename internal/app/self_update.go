@@ -100,9 +100,8 @@ func newManagerUpdateService(root, repository string, runner openwrt.Runner) (*m
 	return service, nil
 }
 
-// SelfUpdate performs only an explicit CLI-requested manager update. It is not
-// exposed through the running HTTP process, avoiding a daemon replacing and
-// terminating itself in the middle of an authenticated request.
+// SelfUpdate runs in a CLI process or a separate procd worker. The HTTP daemon
+// only queues a durable job; it never replaces itself inside a request.
 func (actions *Actions) SelfUpdate(ctx context.Context, options cli.SelfUpdateOptions) error {
 	root, err := actions.resolveRoot(options.Root)
 	if err != nil {
@@ -119,6 +118,8 @@ func (actions *Actions) SelfUpdate(ctx context.Context, options cli.SelfUpdateOp
 		return err
 	}
 	switch options.Action {
+	case "worker":
+		return (&ManagerWebUpdater{Service: service}).RunJob(ctx, options.JobID)
 	case "check":
 		status, err := service.Check(ctx)
 		if err != nil {

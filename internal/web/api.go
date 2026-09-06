@@ -132,6 +132,28 @@ type ManagerUpdateStatus struct {
 	CheckFailed     bool       `json:"checkFailed,omitempty"`
 }
 
+// ManagerUpdateJob is durable across a manager handoff or a router reboot.
+// ErrorCode is public; detailed installer errors stay in the system log.
+type ManagerUpdateJob struct {
+	ID             string    `json:"id"`
+	State          string    `json:"state"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+	CurrentVersion string    `json:"currentVersion,omitempty"`
+	RestartMode    string    `json:"restartMode,omitempty"`
+	ErrorCode      string    `json:"errorCode,omitempty"`
+}
+
+type ManagerUpdateView struct {
+	ManagerUpdateStatus
+	Job *ManagerUpdateJob `json:"job,omitempty"`
+}
+
+type ManagerUpdateService interface {
+	UpdateStatus(context.Context, bool) (ManagerUpdateView, error)
+	StartUpdate(context.Context, bool) (ManagerUpdateJob, error)
+}
+
 type ProfileRef struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
@@ -850,6 +872,7 @@ type Services struct {
 	FakeIPWhitelist       FakeIPWhitelistService
 	Backups               BackupService
 	CoreUpdates           CoreUpdateService
+	ManagerUpdates        ManagerUpdateService
 	ExternalDashboard     ExternalDashboardService
 	ExternalDashboardHTTP http.Handler
 	Core                  CoreService

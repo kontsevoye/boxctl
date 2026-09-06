@@ -35,6 +35,7 @@
 
 .connections-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: .55rem;
   margin-bottom: .8rem;
@@ -44,8 +45,12 @@
 
 .connections-toolbar select {
   flex: 0 1 12rem;
+  min-width: 0;
+  max-width: 100%;
   min-height: 2.8rem;
 }
+
+.connections-toolbar .connections-device-filter { flex-basis: 17rem; }
 
 .connections-mobile-sort,
 .connections-mobile-sort-direction {
@@ -260,5 +265,6 @@
 
 @media (max-width: 560px) {
   .connections-toolbar > select,
+  .connections-toolbar .connections-device-filter,
   .connections-mobile-sort { flex-basis: 100%; }
 }

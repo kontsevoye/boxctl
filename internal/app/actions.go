@@ -1199,6 +1199,13 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		Layout: layout, Profiles: mihomoPreparer.Profiles, Lifecycle: lifecycle, Host: host,
 		SingBoxVersion: singBoxDriver.Version,
 	}
+	if root == state.DefaultRoot && managerUpdates != nil {
+		updater, updateErr := newManagerUpdateService(root, defaultManagerRepository, runner)
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		services.ManagerUpdates = &ManagerWebUpdater{Service: updater, Checker: managerUpdates, Logger: logger}
+	}
 	services.SessionSecrets = credentials
 	services.AdminSetup = credentials
 	if restartGuard != nil {
