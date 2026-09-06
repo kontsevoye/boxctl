@@ -108,14 +108,13 @@ func NewActions(options ActionOptions) *Actions {
 }
 
 type serveBuildOptions struct {
-	NoCore                  bool
-	NoGateway               bool
-	StartStopped            bool
-	CookieSecure            bool
-	AllowedHosts            []string
-	PublicOrigin            string
-	UnsafeExternalDashboard bool
-	lockRoot                string
+	NoCore       bool
+	NoGateway    bool
+	StartStopped bool
+	CookieSecure bool
+	AllowedHosts []string
+	PublicOrigin string
+	lockRoot     string
 }
 
 type lifecycleOwner interface {
@@ -208,10 +207,6 @@ func (actions *Actions) Serve(ctx context.Context, options cli.ServeOptions) (re
 	if err != nil {
 		return err
 	}
-	unsafeExternalDashboard, err := parseExplicitBoolSetting("BOXCTL_ENABLE_UNSAFE_EXTERNAL_DASHBOARD", actions.getenv("BOXCTL_ENABLE_UNSAFE_EXTERNAL_DASHBOARD"))
-	if err != nil {
-		return err
-	}
 	runtimeContext, cancelRuntime := context.WithCancel(ctx)
 	defer cancelRuntime()
 
@@ -220,8 +215,8 @@ func (actions *Actions) Serve(ctx context.Context, options cli.ServeOptions) (re
 	runtimeState, err := actions.buildServe(runtimeContext, root, serveBuildOptions{
 		NoCore: options.NoCore, NoGateway: options.NoGateway, StartStopped: options.StartStopped,
 		CookieSecure: tlsSettings.Enabled, AllowedHosts: allowedHosts,
-		PublicOrigin:            strings.TrimSpace(actions.getenv("BOXCTL_PUBLIC_ORIGIN")),
-		UnsafeExternalDashboard: unsafeExternalDashboard, lockRoot: actions.openWrtLockRoot,
+		PublicOrigin: strings.TrimSpace(actions.getenv("BOXCTL_PUBLIC_ORIGIN")),
+		lockRoot:     actions.openWrtLockRoot,
 	}, actions.runner, logger, ring)
 	if err != nil {
 		return fmt.Errorf("initialize service: %w", err)
@@ -853,17 +848,6 @@ func managementAllowedHosts(listenAddress, configured string) ([]string, error) 
 	return values, nil
 }
 
-func parseExplicitBoolSetting(name, value string) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "0", "false", "off", "no":
-		return false, nil
-	case "1", "true", "on", "yes":
-		return true, nil
-	default:
-		return false, fmt.Errorf("%s must be a boolean", name)
-	}
-}
-
 func defaultLANListen(ctx context.Context, runner openwrt.Runner) (string, error) {
 	discovered, err := openwrt.DetectInterfaces(ctx, runner)
 	if err != nil {
@@ -1213,8 +1197,7 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	}}
 	services.Engines = &EngineCatalogService{
 		Layout: layout, Profiles: mihomoPreparer.Profiles, Lifecycle: lifecycle, Host: host,
-		SingBoxVersion:          singBoxDriver.Version,
-		UnsafeExternalDashboard: options.UnsafeExternalDashboard,
+		SingBoxVersion: singBoxDriver.Version,
 	}
 	services.SessionSecrets = credentials
 	services.AdminSetup = credentials
@@ -1334,7 +1317,7 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	var coreService *CoreService
 	if !options.NoCore {
 		coreService, err = NewCoreService(lifecycle, enginePreparer, host, CoreServiceOptions{
-			CoreName: "core", UnsafeExternalDashboard: options.UnsafeExternalDashboard,
+			CoreName:        "core",
 			SelectedEngine:  func() string { return selectedProfileEngine(mihomoPreparer.Profiles) },
 			ConnectionNames: newConnectionNameResolver(connectionNameResolverOptions{}),
 		})
@@ -1359,19 +1342,19 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 			Selected: func() string { return selectedProfileEngine(mihomoPreparer.Profiles) },
 		}
 		services.CoreUpdates = updates
-		if options.UnsafeExternalDashboard {
-			dashboardManager, dashboardErr := NewExternalDashboardManager(root, &http.Client{Timeout: 90 * time.Second}, host)
-			if dashboardErr != nil {
-				_ = coreService.Close()
-				return nil, dashboardErr
-			}
-			dashboard := clashExternalDashboard{
-				manager:  dashboardManager,
-				selected: func() string { return selectedProfileEngine(mihomoPreparer.Profiles) },
-			}
-			services.ExternalDashboard = dashboard
-			services.ExternalDashboardHTTP = dashboard
+		dashboardManager, dashboardErr := NewExternalDashboardManager(root, &http.Client{Timeout: 90 * time.Second}, host)
+		if dashboardErr != nil {
+			_ = coreService.Close()
+			return nil, dashboardErr
 		}
+		dashboard := &clashExternalDashboard{
+			manager:  dashboardManager,
+			settings: mihomoPreparer.State,
+			selected: func() string { return selectedProfileEngine(mihomoPreparer.Profiles) },
+		}
+		services.ExternalDashboard = dashboard
+		services.ExternalDashboardHTTP = dashboard
+		settingsService.ExternalDashboardChanged = dashboard.cancelRequests
 		automaticUpdates = NewAutomaticCoreUpdates(mihomoPreparer.State, updates, logger)
 		configService.OnReload = func(callbackContext context.Context) (bool, error) {
 			if lifecycle.Snapshot().State != LifecycleRunning {

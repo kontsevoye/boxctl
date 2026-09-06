@@ -36,8 +36,10 @@ keys, router backups, or unredacted configuration files in a public issue.
   replaces configuration or state.
 - Restore rejects absolute paths, traversal, links, duplicate entries,
   oversized payloads, and files outside the documented state allow-list.
-- The optional Zashboard integration is disabled unless
-  `BOXCTL_ENABLE_UNSAFE_EXTERNAL_DASHBOARD=1` is set at daemon startup. Its
+- The optional Zashboard integration is disabled by default and is enabled
+  through the authenticated, CSRF-protected web Settings API. The persisted
+  switch takes effect without a restart. Disabling it blocks dashboard files
+  and controller requests and cancels existing proxied streams. Its
   downloaded JavaScript is served from the authenticated boxctl origin and can
   therefore act with administrator authority; a release digest proves asset
   integrity, not source trust or reproducibility.

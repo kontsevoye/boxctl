@@ -82,8 +82,9 @@ type ExternalDashboardManager struct {
 	MaxFiles         int
 	MaxFileBytes     int64
 
-	installMu sync.Mutex
-	contentMu sync.RWMutex
+	installMu   sync.Mutex
+	contentMu   sync.RWMutex
+	recoveryErr error
 }
 
 func NewExternalDashboardManager(root string, client *http.Client, provider ActiveControllerProvider) (*ExternalDashboardManager, error) {
@@ -104,7 +105,9 @@ func NewExternalDashboardManager(root string, client *http.Client, provider Acti
 		manager.ControllerTarget = provider.ActiveControllerEndpoint
 	}
 	if err := manager.recoverInterruptedPublish(); err != nil {
-		return nil, err
+		// An optional dashboard must not prevent the manager or proxy core
+		// from starting. Surface recovery errors in its own settings section.
+		manager.recoveryErr = dashboardPublicError("dashboard_recovery_failed", "Unable to recover the previous Zashboard installation", err)
 	}
 	return manager, nil
 }
@@ -164,6 +167,9 @@ func (manager *ExternalDashboardManager) installLatest(ctx context.Context, requ
 
 	manager.contentMu.Lock()
 	err := manager.recoverInterruptedPublish()
+	if err == nil {
+		manager.recoveryErr = nil
+	}
 	manager.contentMu.Unlock()
 	if err != nil {
 		return web.ExternalDashboardResult{}, err
@@ -212,6 +218,9 @@ func dashboardPublicError(code, message string, cause error) error {
 
 func (manager *ExternalDashboardManager) localStatusLocked() (web.ExternalDashboardStatus, error) {
 	status := web.ExternalDashboardStatus{Name: externalDashboardName}
+	if manager.recoveryErr != nil {
+		return status, manager.recoveryErr
+	}
 	installed, err := validDashboardDirectory(manager.Layout.DashboardDir)
 	if err != nil {
 		return status, err
@@ -690,7 +699,7 @@ func (manager *ExternalDashboardManager) ServeHTTP(w http.ResponseWriter, r *htt
 	manager.contentMu.RLock()
 	defer manager.contentMu.RUnlock()
 	installed, err := validDashboardDirectory(manager.Layout.DashboardDir)
-	if err != nil || !installed {
+	if err != nil || !installed || manager.recoveryErr != nil {
 		http.NotFound(w, r)
 		return
 	}

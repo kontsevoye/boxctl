@@ -95,6 +95,7 @@ export interface Capabilities {
 }
 
 export interface Settings {
+  externalDashboardEnabled?: boolean
   coreRestartGuard?: boolean
   coreRestartGuardSupported?: boolean
   language: string
@@ -150,6 +151,7 @@ export interface CoreUpdateResult {
 }
 
 export interface ExternalDashboardStatus {
+  enabled?: boolean
   name: string
   installed: boolean
   currentVersion?: string

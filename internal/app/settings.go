@@ -26,6 +26,7 @@ const defaultMihomoFakeIPRange = "198.18.0.0/15"
 type RuntimeSettings struct {
 	Raw state.Settings
 
+	ExternalDashboardEnabled             bool
 	CoreRestartGuard                     bool
 	OperatingMode                        string
 	CaptureMode                          openwrt.Mode
@@ -186,17 +187,18 @@ func DecodeRuntimeSettings(raw state.Settings) (RuntimeSettings, error) {
 	}
 
 	for key, target := range map[string]*bool{
-		"CORE_RESTART_GUARD":    &result.CoreRestartGuard,
-		"BLOCK_QUIC":            &result.RejectQUIC,
-		"AUTO_DETECT_WAN":       &result.AutoDetectWAN,
-		"AUTO_DETECT_LAN":       &result.AutoDetectLAN,
-		"AUTO_FAKEIP_WHITELIST": &result.AutoFakeIP,
+		"EXTERNAL_DASHBOARD_ENABLED":                &result.ExternalDashboardEnabled,
+		"CORE_RESTART_GUARD":                        &result.CoreRestartGuard,
+		"BLOCK_QUIC":                                &result.RejectQUIC,
+		"AUTO_DETECT_WAN":                           &result.AutoDetectWAN,
+		"AUTO_DETECT_LAN":                           &result.AutoDetectLAN,
+		"AUTO_FAKEIP_WHITELIST":                     &result.AutoFakeIP,
 		"AUTO_FAKEIP_INCLUDE_EXTERNAL_IP_PROVIDERS": &result.AutoFakeIPIncludeExternalIPProviders,
-		"USE_TMPFS_RULES":         &result.UseTmpfsRules,
-		"ENABLE_HWID":             &result.EnableHWID,
-		"INTERCEPT_ROUTER_OUTPUT": &result.InterceptOutput,
-		"AUTO_REFRESH_PROXY_IPS":  &result.AutoRefreshProxyIPs,
-		"AUTO_REFRESH_FAKEIP":     &result.AutoRefreshFakeIP,
+		"USE_TMPFS_RULES":                           &result.UseTmpfsRules,
+		"ENABLE_HWID":                               &result.EnableHWID,
+		"INTERCEPT_ROUTER_OUTPUT":                   &result.InterceptOutput,
+		"AUTO_REFRESH_PROXY_IPS":                    &result.AutoRefreshProxyIPs,
+		"AUTO_REFRESH_FAKEIP":                       &result.AutoRefreshFakeIP,
 	} {
 		*target, err = settingBool(raw, key, *target)
 		if err != nil {

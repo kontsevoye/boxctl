@@ -192,6 +192,7 @@ code { border: 1px solid var(--border); border-radius: .4rem; background: var(--
 .external-dashboard-nav-error { display: block; padding: .25rem .8rem .4rem; color: var(--danger); font-size: .72rem; line-height: 1.35; }
 .dashboard-version { display: block; margin: .35rem 0; }
 .dashboard-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; }
+.external-dashboard-settings { margin-bottom: 1rem; }
 .nav-glyph { width: 1.1rem; color: currentcolor; text-align: center; font-weight: 700; }
 .sidebar-footer { display: grid; gap: .55rem; margin-top: auto; border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent); padding: .85rem .2rem 0; }
 .boxctl-version { position: relative; min-width: 0; display: flex; align-items: center; gap: .65rem; color: var(--muted); }

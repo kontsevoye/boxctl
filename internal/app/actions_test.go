@@ -580,7 +580,7 @@ func TestServeNoGatewayStillSupervisesCoreThroughInjectedNoopGraph(t *testing.T)
 	actions := newIsolatedActions(t, io.Discard)
 	actions.listen = func(string, string) (net.Listener, error) { return newCancelListener(cancel), nil }
 	actions.buildServe = func(_ context.Context, _ string, options serveBuildOptions, _ openwrt.Runner, _ *slog.Logger, _ *eventlog.Ring) (*serveRuntime, error) {
-		if !options.NoGateway || options.NoCore || options.UnsafeExternalDashboard || options.PublicOrigin != "" {
+		if !options.NoGateway || options.NoCore || options.PublicOrigin != "" {
 			t.Fatalf("wrong build options: %#v", options)
 		}
 		return &serveRuntime{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), Lifecycle: lifecycle}, nil
@@ -599,14 +599,13 @@ func TestServeWiresExplicitPublicWebOptions(t *testing.T) {
 	actions := newIsolatedActions(t, io.Discard)
 	actions.getenv = func(key string) string {
 		return map[string]string{
-			"BOXCTL_ALLOWED_HOSTS":                    "router.example, router.home",
-			"BOXCTL_PUBLIC_ORIGIN":                    "https://router.example",
-			"BOXCTL_ENABLE_UNSAFE_EXTERNAL_DASHBOARD": "true",
+			"BOXCTL_ALLOWED_HOSTS": "router.example, router.home",
+			"BOXCTL_PUBLIC_ORIGIN": "https://router.example",
 		}[key]
 	}
 	actions.listen = func(string, string) (net.Listener, error) { return newCancelListener(cancel), nil }
 	actions.buildServe = func(_ context.Context, _ string, options serveBuildOptions, _ openwrt.Runner, _ *slog.Logger, _ *eventlog.Ring) (*serveRuntime, error) {
-		if options.PublicOrigin != "https://router.example" || !options.UnsafeExternalDashboard {
+		if options.PublicOrigin != "https://router.example" {
 			t.Fatalf("web options = %#v", options)
 		}
 		if !slices.Equal(options.AllowedHosts, []string{"127.0.0.1", "router.example", "router.home"}) {
@@ -638,25 +637,6 @@ func TestServeRejectsWildcardBeforeBuildingOrListening(t *testing.T) {
 	}
 	if called {
 		t.Fatal("runtime built after unsafe bind")
-	}
-}
-
-func TestExplicitBooleanSettingRejectsAmbiguousValues(t *testing.T) {
-	t.Parallel()
-	for _, value := range []string{"", "0", "false", "off", "no"} {
-		enabled, err := parseExplicitBoolSetting("FEATURE", value)
-		if err != nil || enabled {
-			t.Errorf("parseExplicitBoolSetting(%q) = %v, %v", value, enabled, err)
-		}
-	}
-	for _, value := range []string{"1", "true", "on", "yes"} {
-		enabled, err := parseExplicitBoolSetting("FEATURE", value)
-		if err != nil || !enabled {
-			t.Errorf("parseExplicitBoolSetting(%q) = %v, %v", value, enabled, err)
-		}
-	}
-	if _, err := parseExplicitBoolSetting("FEATURE", "enabled-ish"); err == nil {
-		t.Fatal("ambiguous boolean value was accepted")
 	}
 }
 

@@ -19,13 +19,11 @@ start_service() {
 	}
 	allowed_hosts=
 	public_origin=
-	enable_external_dashboard=0
 	tls_certificate=
 	tls_key=
 	config_load boxctl
 	config_get allowed_hosts main allowed_hosts ''
 	config_get public_origin main public_origin ''
-	config_get_bool enable_external_dashboard main enable_unsafe_external_dashboard 0
 	config_get tls_certificate main tls_certificate ''
 	config_get tls_key main tls_key ''
 	if { [ -n "$tls_certificate" ] && [ -z "$tls_key" ]; } || { [ -z "$tls_certificate" ] && [ -n "$tls_key" ]; }; then
@@ -45,7 +43,6 @@ start_service() {
 	procd_set_param env HOME="$BOXCTL_ROOT" TMPDIR="/tmp" BOXCTL_ROOT="$BOXCTL_ROOT"
 	[ -z "$allowed_hosts" ] || procd_append_param env BOXCTL_ALLOWED_HOSTS="$allowed_hosts"
 	[ -z "$public_origin" ] || procd_append_param env BOXCTL_PUBLIC_ORIGIN="$public_origin"
-	[ "$enable_external_dashboard" = 0 ] || procd_append_param env BOXCTL_ENABLE_UNSAFE_EXTERNAL_DASHBOARD=1
 	[ -z "$tls_certificate" ] || procd_append_param env BOXCTL_TLS="$tls_certificate,$tls_key"
 	procd_set_param limits nofile="1048576 1048576"
 	procd_set_param respawn 3600 5 5

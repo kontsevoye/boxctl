@@ -42,27 +42,25 @@ type CoreBackend interface {
 // CoreServiceOptions contains only public presentation and bounded-memory
 // settings. CoreName must not contain profile or controller data.
 type CoreServiceOptions struct {
-	CoreName                string
-	SelectedEngine          func() string
-	ConnectionNames         ConnectionNameResolver
-	LogHistory              int
-	MaxLogMessageBytes      int
-	UnsafeExternalDashboard bool
+	CoreName           string
+	SelectedEngine     func() string
+	ConnectionNames    ConnectionNameResolver
+	LogHistory         int
+	MaxLogMessageBytes int
 }
 
 // CoreService translates engine contracts into web's secret-free DTOs. It
 // never inspects PreparedCore.Controller or reads native configuration.
 type CoreService struct {
-	core                    CoreBackend
-	preparer                ActivePreparer
-	lifecycle               *Lifecycle
-	coreName                string
-	selectedEngine          func() string
-	connectionNames         ConnectionNameResolver
-	logs                    *eventlog.Ring
-	history                 int
-	maxMessage              int
-	unsafeExternalDashboard bool
+	core            CoreBackend
+	preparer        ActivePreparer
+	lifecycle       *Lifecycle
+	coreName        string
+	selectedEngine  func() string
+	connectionNames ConnectionNameResolver
+	logs            *eventlog.Ring
+	history         int
+	maxMessage      int
 
 	logContext context.Context
 	cancelLogs context.CancelFunc
@@ -109,20 +107,19 @@ func NewCoreService(lifecycle *Lifecycle, preparer ActivePreparer, core CoreBack
 	}
 	logContext, cancelLogs := context.WithCancel(context.Background())
 	service := &CoreService{
-		core:                    core,
-		preparer:                preparer,
-		lifecycle:               lifecycle,
-		coreName:                strings.TrimSpace(options.CoreName),
-		selectedEngine:          options.SelectedEngine,
-		connectionNames:         options.ConnectionNames,
-		logs:                    eventlog.New(history),
-		history:                 history,
-		maxMessage:              maxMessage,
-		unsafeExternalDashboard: options.UnsafeExternalDashboard,
-		logContext:              logContext,
-		cancelLogs:              cancelLogs,
-		logsDone:                make(chan struct{}),
-		dashboardSubscribers:    make(map[chan struct{}]struct{}),
+		core:                 core,
+		preparer:             preparer,
+		lifecycle:            lifecycle,
+		coreName:             strings.TrimSpace(options.CoreName),
+		selectedEngine:       options.SelectedEngine,
+		connectionNames:      options.ConnectionNames,
+		logs:                 eventlog.New(history),
+		history:              history,
+		maxMessage:           maxMessage,
+		logContext:           logContext,
+		cancelLogs:           cancelLogs,
+		logsDone:             make(chan struct{}),
+		dashboardSubscribers: make(map[chan struct{}]struct{}),
 	}
 	go service.collectLogs(core.Logs())
 	return service, nil
@@ -183,7 +180,7 @@ func (service *CoreService) Capabilities(ctx context.Context) (web.Capabilities,
 	snapshot := service.lifecycleView()
 	engineName := service.name(snapshot)
 	mihomoResources := engineName == state.EngineMihomo
-	externalDashboard := service.unsafeExternalDashboard && supportsClashExternalDashboard(engineName)
+	externalDashboard := supportsClashExternalDashboard(engineName)
 	return web.Capabilities{
 		CoreName:    service.name(snapshot),
 		CoreVersion: snapshot.health.Version,

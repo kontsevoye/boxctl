@@ -6,12 +6,12 @@ import { ChoiceField } from '../components/ChoiceField'
 import { ErrorPanel, Loading, PageHeader } from '../components/Common'
 import { BoxctlVersion } from '../components/BoxctlVersion'
 import { Toast } from '../components/Toast'
+import { ExternalDashboardPanel } from '../components/ExternalDashboardPanel'
 import { useFallbackQuery, useQuery } from '../hooks'
 import { useI18n } from '../i18n'
 import { legacyEngine, selectedEngine } from '../engines'
 import { applyTheme } from '../theme'
-import type { Capabilities, CoreUpdateResult, CoreUpdateStatus, EngineInfo, ExternalDashboardResult, ExternalDashboardStatus, Settings } from '../types'
-import { useExternalDashboard } from '../use-external-dashboard'
+import type { Capabilities, CoreUpdateResult, CoreUpdateStatus, EngineInfo, Settings } from '../types'
 import { BackupsPage } from './BackupsPage'
 
 type PortListField = 'bypassTCPPorts' | 'bypassUDPPorts' | 'proxyOnlyTCPPorts' | 'proxyOnlyUDPPorts'
@@ -26,16 +26,13 @@ export function SettingsPage() {
   const activeEngine = selectedEngine(engines)
   const { setLocale, t } = useI18n()
   const query = useQuery<Settings>('/settings')
-  const externalDashboardAvailable = externalDashboardEnabled(capabilities, activeEngine)
+  const externalDashboardAvailable = externalDashboardSupported(capabilities, activeEngine)
   const engineCaptureModes = activeEngine?.supportedCaptureModes ?? []
-  const externalDashboard = useQuery<ExternalDashboardStatus>('/external-dashboard?checkUpdates=true', externalDashboardAvailable)
-  const externalDashboardLaunch = useExternalDashboard(() => externalDashboard.reload())
   const [form, setForm] = useState<Settings>()
   const [busy, setBusy] = useState(false)
 	const [firewallBusy, setFirewallBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState<APIError>()
-  const [externalDashboardBusy, setExternalDashboardBusy] = useState(false)
   const [listText, setListText] = useState<Record<ListField, string>>(emptyListText)
   const [portErrors, setPortErrors] = useState<Partial<Record<PortListField, PortListError>>>({})
   useEffect(() => {
@@ -107,25 +104,6 @@ export function SettingsPage() {
 			setFirewallBusy(false)
 		}
 	}
-  const manageExternalDashboard = async () => {
-    const installed = externalDashboard.data?.installed ?? false
-    if (!installed && !confirm(t('confirmExternalDashboardTrust'))) return
-    setExternalDashboardBusy(true)
-    setError(undefined)
-    setMessage('')
-    try {
-      const result = await request<ExternalDashboardResult>(`/external-dashboard/${installed ? 'update' : 'install'}`, { method: 'POST', body: '{}' })
-      const outcome = result.changed
-        ? t(installed ? 'externalDashboardUpdated' : 'externalDashboardInstalled')
-        : t('externalDashboardAlreadyCurrent')
-      setMessage(result.currentVersion ? `${outcome}: ${result.currentVersion}` : outcome)
-      externalDashboard.reload()
-    } catch (reason) {
-      setError(reason instanceof APIError ? reason : new APIError(0, 'network_error', String(reason)))
-    } finally {
-      setExternalDashboardBusy(false)
-    }
-  }
 
   return <>
     <PageHeader title={t('settings')} />
@@ -139,6 +117,7 @@ export function SettingsPage() {
 				<button className="du-btn du-btn-warning du-btn-sm" type="button" disabled={firewallBusy || busy} onClick={() => void cleanupFirewall()}>{firewallBusy ? t('firewallCleaning') : t('cleanupFirewall')}</button>
 			</div>
 		</div>}
+    {externalDashboardAvailable && <ExternalDashboardPanel settings={query.data} />}
     {form && <form className="du-card panel settings-form" onSubmit={save}>
       {Object.keys(portErrors).length > 0 && <div className="du-alert du-alert-error" role="alert">{t('invalidPortLists')}</div>}
       <div className="form-grid">
@@ -205,40 +184,6 @@ export function SettingsPage() {
 		<div className="settings-section">
 			<div className="title-row"><div><h2>{t('integratedDashboard')}</h2><small>{t('integratedDashboardHint')}</small></div><a className="du-btn du-btn-outline du-btn-sm" href="/proxies">{t('openDashboard')}</a></div>
 		</div>
-      {externalDashboardAvailable && <div className="settings-section">
-        <div className="title-row">
-          <div>
-            <h2>{t('externalDashboard')}</h2>
-            <small>{t('externalDashboardHint')}</small>
-            {externalDashboard.data && <small className="dashboard-version">
-              {externalDashboard.data.installed
-                ? `${t('externalDashboardVersion')}: ${externalDashboard.data.currentVersion ?? '—'}`
-                : t('externalDashboardNotInstalled')}
-            </small>}
-            {externalDashboard.data?.latestVersion && <small className="dashboard-version">{t('latestVersion')}: {externalDashboard.data.latestVersion}</small>}
-            {externalDashboard.data?.updateCheckFailed && <small className="field-error" role="status">{t('externalDashboardUpdateCheckFailed')}</small>}
-            {externalDashboard.data?.installed && !externalDashboard.data.updateCheckFailed && <span className={`du-badge du-badge-sm ${externalDashboard.data.updateAvailable ? 'du-badge-warning' : 'du-badge-success'}`}>
-              {t(externalDashboard.data.updateAvailable ? 'externalDashboardUpdateAvailable' : 'externalDashboardAlreadyCurrent')}
-            </span>}
-          </div>
-          <div className="dashboard-actions">
-            {(!externalDashboard.data?.installed || !externalDashboard.data.updateCheckFailed) && <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={externalDashboardBusy || externalDashboardLaunch.busy || externalDashboard.loading || !canManageExternalDashboard(externalDashboard.data)} onClick={() => void manageExternalDashboard()}>
-              {externalDashboardBusy
-                ? t(externalDashboard.data?.installed ? 'externalDashboardUpdating' : 'externalDashboardInstalling')
-                : t(externalDashboard.data?.installed
-                  ? (externalDashboard.data.updateAvailable ? 'externalDashboardUpdate' : 'externalDashboardAlreadyCurrent')
-                  : 'externalDashboardInstall')}
-            </button>}
-            {externalDashboard.data?.installed && externalDashboard.data.updateCheckFailed && <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={externalDashboardBusy || externalDashboardLaunch.busy || externalDashboard.loading} onClick={externalDashboard.reload}>{t('refresh')}</button>}
-            {externalDashboard.data?.installed && <button className="du-btn du-btn-primary du-btn-sm" type="button" disabled={externalDashboardBusy || externalDashboardLaunch.busy} onClick={externalDashboardLaunch.launch}>
-              {externalDashboardLaunch.busy ? t('externalDashboardOpening') : t('externalDashboardOpen')}
-            </button>}
-          </div>
-        </div>
-        {externalDashboard.loading && !externalDashboard.data && <Loading />}
-        {externalDashboard.error && <ErrorPanel error={externalDashboard.error} onRetry={externalDashboard.reload} />}
-        {externalDashboardLaunch.error && <div className="du-alert du-alert-error" role="alert">{externalDashboardLaunch.error}</div>}
-      </div>}
       <div className="form-actions"><button className="du-btn du-btn-primary du-btn-sm" disabled={busy}>{busy ? t('saving') : t('save')}</button></div>
     </form>}
     {canShowPage(capabilities, 'backups') && <section className="settings-backups"><BackupsPage /></section>}
@@ -289,11 +234,7 @@ export function isCleanCoreInstall(status?: CoreUpdateStatus): boolean {
 	return status?.currentVersion?.trim() === '' || status?.currentVersion === undefined
 }
 
-export function canManageExternalDashboard(status?: ExternalDashboardStatus): boolean {
-  return status !== undefined && (!status.installed || status.updateAvailable)
-}
-
-export function externalDashboardEnabled(capabilities: Capabilities, engine?: EngineInfo): boolean {
+export function externalDashboardSupported(capabilities: Capabilities, engine?: EngineInfo): boolean {
   return engine ? engine.management.externalDashboard : capabilities.features?.externalDashboard === true
 }
 

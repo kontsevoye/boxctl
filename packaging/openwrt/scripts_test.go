@@ -240,7 +240,6 @@ func TestServiceUsesProcdAndOwnedCleanup(t *testing.T) {
 		`config_load boxctl`,
 		`procd_append_param env BOXCTL_ALLOWED_HOSTS="$allowed_hosts"`,
 		`procd_append_param env BOXCTL_PUBLIC_ORIGIN="$public_origin"`,
-		`procd_append_param env BOXCTL_ENABLE_UNSAFE_EXTERNAL_DASHBOARD=1`,
 		`procd_append_param env BOXCTL_TLS="$tls_certificate,$tls_key"`,
 		`"$BOXCTL_BIN" cleanup`,
 		`procd_add_reload_trigger "network" "firewall"`,

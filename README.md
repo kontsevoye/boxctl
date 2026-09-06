@@ -266,7 +266,6 @@ example:
 ```sh
 uci set boxctl.main.public_origin='https://router.example'
 uci set boxctl.main.allowed_hosts='router.home'
-uci set boxctl.main.enable_unsafe_external_dashboard='1'
 # For TLS served directly by boxctl, set both absolute paths instead:
 # uci set boxctl.main.tls_certificate='/etc/ssl/boxctl.crt'
 # uci set boxctl.main.tls_key='/etc/ssl/private/boxctl.key'
@@ -277,9 +276,12 @@ service boxctl restart
 ### Optional external dashboard
 
 Zashboard is not bundled with boxctl and its integration is disabled by
-default. Set `BOXCTL_ENABLE_UNSAFE_EXTERNAL_DASHBOARD=1` before a direct
-`boxctl serve`, or use the UCI option above, to expose the explicit install
-control. If an administrator then chooses to install it, boxctl downloads
+default. Open **Settings → External Zashboard** to enable or disable it, install
+it, check for updates, update it, and open the installed dashboard. The switch
+is saved immediately and requires no service or core restart. Disabling it
+blocks dashboard files and the controller proxy and closes existing proxied
+streams; installed files are retained and can still be updated while disabled.
+No environment variable or UCI option is required. When installing, boxctl downloads
 `dist-no-fonts.zip` from a tagged
 `Zephyruso/zashboard` GitHub Release, requires GitHub's size and SHA-256 digest,
 checks archive paths and extraction limits, and publishes it atomically. The

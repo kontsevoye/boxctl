@@ -199,6 +199,7 @@ type StatusService interface {
 // Settings is intentionally a public allow-list. Credentials, API secrets,
 // subscription URLs, and engine configuration must not be added to this DTO.
 type Settings struct {
+	ExternalDashboardEnabled             bool              `json:"externalDashboardEnabled"`
 	CoreRestartGuard                     bool              `json:"coreRestartGuard"`
 	CoreRestartGuardSupported            bool              `json:"coreRestartGuardSupported"`
 	Language                             string            `json:"language"`
@@ -250,6 +251,7 @@ type InterfaceCatalog struct {
 
 // SettingsPatch uses pointers so omitted values are distinguishable from zero values.
 type SettingsPatch struct {
+	ExternalDashboardEnabled             *bool     `json:"externalDashboardEnabled,omitempty"`
 	CoreRestartGuard                     *bool     `json:"coreRestartGuard,omitempty"`
 	Language                             *string   `json:"language,omitempty"`
 	Theme                                *string   `json:"theme,omitempty"`
@@ -616,6 +618,7 @@ type EngineUpdateService interface {
 // Release URLs, checksums, filesystem paths, and the active core controller
 // secret deliberately remain server-side.
 type ExternalDashboardStatus struct {
+	Enabled           bool   `json:"enabled"`
 	Name              string `json:"name"`
 	Installed         bool   `json:"installed"`
 	CurrentVersion    string `json:"currentVersion,omitempty"`

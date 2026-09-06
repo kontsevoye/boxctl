@@ -16,12 +16,11 @@ import (
 var allCaptureModes = []string{"tproxy", "hybrid", "tun", "mixed", "mixed2"}
 
 type EngineCatalogService struct {
-	Layout                  state.Layout
-	Profiles                state.ProfileStore
-	Lifecycle               *Lifecycle
-	Host                    *EngineHost
-	SingBoxVersion          func(context.Context, string) (string, error)
-	UnsafeExternalDashboard bool
+	Layout         state.Layout
+	Profiles       state.ProfileStore
+	Lifecycle      *Lifecycle
+	Host           *EngineHost
+	SingBoxVersion func(context.Context, string) (string, error)
 }
 
 func (service *EngineCatalogService) Engines(ctx context.Context) ([]web.EngineInfo, error) {
@@ -70,7 +69,7 @@ func (service *EngineCatalogService) Engines(ctx context.Context) ([]web.EngineI
 		result[index].SupportedCaptureModes = append([]string(nil), allCaptureModes...)
 		result[index].Management.RemoteProfiles = true
 		result[index].Management.Updates = true
-		result[index].Management.ExternalDashboard = service.UnsafeExternalDashboard && supportsClashExternalDashboard(result[index].ID)
+		result[index].Management.ExternalDashboard = supportsClashExternalDashboard(result[index].ID)
 		if result[index].ID == state.EngineMihomo {
 			result[index].Management.ProxySubscriptions = true
 			result[index].Management.LocalRuleLists = true

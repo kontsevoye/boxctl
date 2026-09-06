@@ -6,9 +6,6 @@ config boxctl 'main'
 	# example https://router.example. The proxy must preserve the Host header.
 	option public_origin ''
 
-	# Zashboard runs as administrator-equivalent same-origin JavaScript.
-	option enable_unsafe_external_dashboard '0'
-
 	# Set both absolute paths to serve HTTPS directly from boxctl.
 	option tls_certificate ''
 	option tls_key ''

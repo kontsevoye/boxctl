@@ -138,12 +138,12 @@ func TestAuthenticationCSRFAndStructuredErrors(t *testing.T) {
 	}
 
 	cookie, csrf := login(t, handler)
-	withoutCSRF := perform(handler, http.MethodPut, "/api/v1/settings", `{"language":"en"}`, cookie, "")
+	withoutCSRF := perform(handler, http.MethodPut, "/api/v1/settings", `{"language":"en","externalDashboardEnabled":true}`, cookie, "")
 	if withoutCSRF.Code != http.StatusForbidden || !strings.Contains(withoutCSRF.Body.String(), `"code":"csrf_failed"`) {
 		t.Fatalf("CSRF response = %d %s", withoutCSRF.Code, withoutCSRF.Body.String())
 	}
-	withCSRF := perform(handler, http.MethodPut, "/api/v1/settings", `{"language":"en"}`, cookie, csrf)
-	if withCSRF.Code != http.StatusOK || settings.updates != 1 {
+	withCSRF := perform(handler, http.MethodPut, "/api/v1/settings", `{"language":"en","externalDashboardEnabled":true}`, cookie, csrf)
+	if withCSRF.Code != http.StatusOK || settings.updates != 1 || settings.patch.ExternalDashboardEnabled == nil || !*settings.patch.ExternalDashboardEnabled {
 		t.Fatalf("authorized update = %d %s, updates=%d", withCSRF.Code, withCSRF.Body.String(), settings.updates)
 	}
 

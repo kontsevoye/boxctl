@@ -17,14 +17,15 @@ import (
 )
 
 type SettingsService struct {
-	mu                    sync.Mutex
-	Lifecycle             *Lifecycle
-	ConfigureRestartGuard func(context.Context, RuntimeSettings) error
-	State                 state.Store
-	OnChanged             func(context.Context, bool) error
-	SetStartOnBoot        func(context.Context, bool) error
-	DiscoverInterfaces    func(context.Context) (web.InterfaceCatalog, error)
-	SelectedEngine        func() string
+	mu                       sync.Mutex
+	Lifecycle                *Lifecycle
+	ConfigureRestartGuard    func(context.Context, RuntimeSettings) error
+	ExternalDashboardChanged func()
+	State                    state.Store
+	OnChanged                func(context.Context, bool) error
+	SetStartOnBoot           func(context.Context, bool) error
+	DiscoverInterfaces       func(context.Context) (web.InterfaceCatalog, error)
+	SelectedEngine           func() string
 }
 
 func NewSettingsService(root string) (*SettingsService, error) {
@@ -76,6 +77,7 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 	applyStringPatch(raw, "PROXY_MODE", patch.CaptureMode)
 	applyBoolPatch(raw, "START_ON_BOOT", patch.StartOnBoot)
 	applyBoolPatch(raw, "CORE_RESTART_GUARD", patch.CoreRestartGuard)
+	applyBoolPatch(raw, "EXTERNAL_DASHBOARD_ENABLED", patch.ExternalDashboardEnabled)
 	applyBoolPatch(raw, "AUTO_UPDATE", patch.AutoUpdate)
 	applyStringPatch(raw, "OPERATING_MODE", patch.OperatingMode)
 	applyStringPatch(raw, "INTERFACE_MODE", patch.InterfaceMode)
@@ -174,6 +176,9 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 		}
 		return web.Settings{}, err
 	}
+	if current.ExternalDashboardEnabled != candidate.ExternalDashboardEnabled && service.ExternalDashboardChanged != nil {
+		service.ExternalDashboardChanged()
+	}
 	unlock() // Callbacks may restart under the same lifecycle gate.
 	selectedEngine := state.EngineMihomo
 	if service.SelectedEngine != nil {
@@ -226,8 +231,9 @@ func runtimeInterfaceCatalog(discovery openwrt.InterfaceDiscovery) web.Interface
 
 func runtimeSettingsWeb(settings RuntimeSettings) web.Settings {
 	return web.Settings{
-		CoreRestartGuard: settings.CoreRestartGuard,
-		Language:         valueOr(settings.Raw, "LANGUAGE", "en"), Theme: valueOr(settings.Raw, "THEME", "system"),
+		ExternalDashboardEnabled: settings.ExternalDashboardEnabled,
+		CoreRestartGuard:         settings.CoreRestartGuard,
+		Language:                 valueOr(settings.Raw, "LANGUAGE", "en"), Theme: valueOr(settings.Raw, "THEME", "system"),
 		LogLevel: valueOr(settings.Raw, "LOG_LEVEL", "info"), UpdateChannel: valueOr(settings.Raw, "UPDATE_CHANNEL", "stable"),
 		CaptureMode: string(settings.CaptureMode), AvailableCaptureModes: []string{"tproxy", "hybrid", "tun", "mixed", "mixed2"},
 		StartOnBoot: settingBoolUnchecked(settings.Raw, "START_ON_BOOT", true), AutoUpdate: settingBoolUnchecked(settings.Raw, "AUTO_UPDATE", false),

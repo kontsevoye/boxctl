@@ -237,7 +237,7 @@ func TestEngineCatalogAdvertisesOnlyImplementedResourceManagement(t *testing.T) 
 	}
 
 	catalog := &EngineCatalogService{
-		Layout: layout, Profiles: profiles, UnsafeExternalDashboard: true,
+		Layout: layout, Profiles: profiles,
 	}
 	engines, err := catalog.Engines(context.Background())
 	if err != nil {

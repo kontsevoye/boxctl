@@ -1,27 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import type { Capabilities, Settings } from '../types'
-import { canManageExternalDashboard, externalDashboardEnabled, isCleanCoreInstall, parsePorts, settingsPortListErrors, settingsUpdatePayload } from './SettingsPage'
+import { externalDashboardSupported, isCleanCoreInstall, parsePorts, settingsPortListErrors, settingsUpdatePayload } from './SettingsPage'
 
 describe('settings update payload', () => {
-	it('only exposes the external dashboard when the server explicitly opts in', () => {
+	it('keeps dashboard settings reachable when the engine supports integration', () => {
 		const capabilities: Capabilities = { coreName: 'mihomo', pages: { proxies: true }, actions: {} }
-		expect(externalDashboardEnabled(capabilities)).toBe(false)
-		expect(externalDashboardEnabled({ ...capabilities, features: { externalDashboard: true } })).toBe(true)
-		expect(externalDashboardEnabled({ ...capabilities, features: { externalDashboard: true } }, {
+		expect(externalDashboardSupported(capabilities)).toBe(false)
+		expect(externalDashboardSupported({ ...capabilities, features: { externalDashboard: true } })).toBe(true)
+		expect(externalDashboardSupported({ ...capabilities, features: { externalDashboard: true } }, {
 	      id: 'sing-box', displayName: 'sing-box', configFormat: 'json', extensions: ['.json'], installed: true, compatible: true, selected: true, running: true, supportedCaptureModes: [],
 	      management: { remoteProfiles: true, proxySubscriptions: true, localRuleLists: true, fakeIPCapture: true, updates: true, externalDashboard: true },
 	    })).toBe(true)
-		expect(externalDashboardEnabled({ ...capabilities, features: { externalDashboard: true } }, {
+		expect(externalDashboardSupported({ ...capabilities, features: { externalDashboard: true } }, {
 	      id: 'sing-box', displayName: 'sing-box', configFormat: 'json', extensions: ['.json'], installed: true, compatible: true, selected: true, running: true, supportedCaptureModes: [],
 	      management: { remoteProfiles: true, proxySubscriptions: true, localRuleLists: true, fakeIPCapture: true, updates: true, externalDashboard: false },
 	    })).toBe(false)
-	})
-
-	it('enables dashboard install/update only when an action is available', () => {
-		expect(canManageExternalDashboard()).toBe(false)
-		expect(canManageExternalDashboard({ name: 'Zashboard', installed: false, latestVersion: 'v3.23.0', updateAvailable: true })).toBe(true)
-		expect(canManageExternalDashboard({ name: 'Zashboard', installed: true, currentVersion: 'v3.22.0', latestVersion: 'v3.23.0', updateAvailable: true })).toBe(true)
-		expect(canManageExternalDashboard({ name: 'Zashboard', installed: true, currentVersion: 'v3.23.0', latestVersion: 'v3.23.0', updateAvailable: false })).toBe(false)
 	})
 
 	it('distinguishes a first Mihomo install from an update', () => {

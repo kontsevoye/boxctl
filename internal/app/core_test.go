@@ -257,7 +257,7 @@ func (fake *coreBackendFake) CloseAllConnections(ctx context.Context) error {
 	return nil
 }
 
-func TestCoreServiceExternalDashboardIsDisabledByDefault(t *testing.T) {
+func TestCoreServiceExternalDashboardManagementIsDiscoverable(t *testing.T) {
 	t.Parallel()
 	backend := newCoreBackendFake()
 	service, err := NewCoreService(&Lifecycle{}, &corePreparerFake{}, backend, CoreServiceOptions{CoreName: "mihomo"})
@@ -269,8 +269,8 @@ func TestCoreServiceExternalDashboardIsDisabledByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capabilities.Features["externalDashboard"] {
-		t.Fatal("external dashboard was enabled without explicit opt-in")
+	if !capabilities.Features["externalDashboard"] {
+		t.Fatal("external dashboard management must remain discoverable before enabling it")
 	}
 }
 
@@ -282,9 +282,8 @@ func TestCoreServiceCapabilitiesFollowSelectedEngineWhileStopped(t *testing.T) {
 		&corePreparerFake{},
 		newCoreBackendFake(),
 		CoreServiceOptions{
-			CoreName:                "core",
-			SelectedEngine:          func() string { return selected },
-			UnsafeExternalDashboard: true,
+			CoreName:       "core",
+			SelectedEngine: func() string { return selected },
 		},
 	)
 	if err != nil {
@@ -328,7 +327,7 @@ func TestCoreServiceCapabilitiesAndHealthAreSecretFree(t *testing.T) {
 		StartedAt: started, LastError: "secret=" + secret,
 	}}
 	preparer := &corePreparerFake{prepared: prepared}
-	service, err := NewCoreService(lifecycle, preparer, backend, CoreServiceOptions{CoreName: "fallback", UnsafeExternalDashboard: true})
+	service, err := NewCoreService(lifecycle, preparer, backend, CoreServiceOptions{CoreName: "fallback"})
 	if err != nil {
 		t.Fatal(err)
 	}
