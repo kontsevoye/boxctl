@@ -1,0 +1,18 @@
+.login-card .auth-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.login-card .auth-header .brand { margin: 0; }
+.login-card .auth-header .sidebar-theme-toggle { display: grid; place-items: center; flex-shrink: 0; width: 2.5rem; min-height: 2.5rem; border-color: var(--border-color); border-radius: .75rem; }
+.login-card h1 { margin-top: 1.6rem; font-size: clamp(1.5rem, 4vw, 1.8rem); letter-spacing: -.035em; line-height: 1.15; }
+.login-card .login-hint { line-height: 1.6; }
+.login-card .du-alert { margin-top: 1.25rem; }
+.login-card .language-switch { display: flex; width: fit-content; }
+.login-card .language-switch .du-tab { min-width: 2.75rem; min-height: 2.5rem; }
+.password-field { display: grid; gap: .5rem; min-width: 0; }
+.password-field > label { color: var(--text); font-size: .8rem; font-weight: 650; }
+.password-field-control { position: relative; min-width: 0; }
+.password-field-control > input { width: 100%; min-height: 2.85rem; padding-right: 3rem; }
+.password-field-control > input[aria-invalid="true"] { border-color: var(--danger); }
+.password-visibility-toggle { position: absolute; inset-block: .2rem; right: .2rem; display: grid; place-items: center; width: 2.5rem; padding: 0; border: 0; border-radius: .5rem; background: transparent; color: var(--muted); cursor: pointer; }
+.password-visibility-toggle:hover:not(:disabled) { background: var(--panel-raised); color: var(--text); }
+.password-visibility-toggle:disabled { cursor: default; opacity: .5; }
+.password-field > small { font-size: .75rem; line-height: 1.45; }
+.login-card form > .du-btn { min-height: 2.85rem; }

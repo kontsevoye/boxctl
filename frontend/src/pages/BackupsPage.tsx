@@ -2,13 +2,15 @@ import { useState } from 'react'
 import { APIError, exportBackup, importBackup } from '../api'
 import { useApp } from '../app-context'
 import { canPerform } from '../capabilities'
-import { ErrorPanel, FilePicker, PageHeader } from '../components/Common'
+import { ErrorPanel, FilePicker, formatBytes, PageHeader } from '../components/Common'
+import { useConfirm } from '../components/ConfirmDialog'
 import { useI18n } from '../i18n'
 import type { BackupExportOptions, BackupImportResult } from '../types'
 
 export function BackupsPage() {
   const { capabilities } = useApp()
   const { t } = useI18n()
+  const confirm = useConfirm()
   const [file, setFile] = useState<File>()
   const [busy, setBusy] = useState('')
   const [error, setError] = useState<APIError>()
@@ -38,7 +40,7 @@ export function BackupsPage() {
   }
 
   const upload = async () => {
-    if (!file || !window.confirm(t('confirmImport'))) return
+    if (!file || !await confirm({ title: t('importBackup'), description: t('confirmImport'), confirmLabel: t('importBackup'), tone: 'danger' })) return
     setBusy('import')
     setError(undefined)
     setResult(undefined)
@@ -82,15 +84,11 @@ export function BackupsPage() {
             onChange={setFile}
           />
         </div>
-        {file && <small>{formatFileSize(file.size)}</small>}
+        {file && <small>{formatBytes(file.size)}</small>}
         <button className="du-btn du-btn-error du-btn-soft du-btn-sm" disabled={busy !== '' || !file || !canPerform(capabilities, 'importBackup')} onClick={upload}>{busy === 'import' ? t('importing') : t('importBackup')}</button>
       </section>
     </div>
   </>
-}
-
-function formatFileSize(bytes: number): string {
-  return `${(bytes / 1024 / 1024).toFixed(2)} MiB`
 }
 
 function asAPIError(reason: unknown): APIError {

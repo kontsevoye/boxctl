@@ -8,7 +8,6 @@ import '../styles/forms.css'
 export function PageHeader({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
   return <header className="page-header">
     <div className="page-heading-copy">
-      <span className="page-kicker">BOXCTL / CONTROL</span>
       <h1>{title}</h1>
       {description && <p>{description}</p>}
     </div>
@@ -63,7 +62,8 @@ export function FilePicker({ accept, disabled = false, fileName, label, onChange
   return <div className="file-picker">
     <input
       ref={input}
-      className="visually-hidden"
+      hidden
+      tabIndex={-1}
       type="file"
       accept={accept}
       disabled={disabled}

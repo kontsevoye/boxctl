@@ -56,14 +56,14 @@ export function RulesPage() {
         <div><small>{t('outbound')}</small><strong>{actions.length}</strong></div>
       </div>
       <div className="dashboard-filter-bar">
-        <label className="proxies-search"><Search size={16} aria-hidden="true" /><input className="du-input du-input-sm" value={search} placeholder={`${t('search')} | Regex`} onInput={(event) => setSearch(event.currentTarget.value)} /></label>
-        <select className="du-select du-select-sm" value={typeFilter} onChange={(event) => setTypeFilter(event.currentTarget.value)}><option value="all">{t('connectionType')}: {t('all')}</option>{types.map((type) => <option value={type} key={type}>{type}</option>)}</select>
-        <select className="du-select du-select-sm" value={actionFilter} onChange={(event) => setActionFilter(event.currentTarget.value)}><option value="all">{t('outbound')}: {t('all')}</option>{actions.map((action) => <option value={action} key={action}>{action}</option>)}</select>
+        <label className="proxies-search"><Search size={16} aria-hidden="true" /><input className="du-input du-input-sm" value={search} aria-label={t('search')} placeholder={`${t('search')} | Regex`} onInput={(event) => setSearch(event.currentTarget.value)} /></label>
+        <select className="du-select du-select-sm" aria-label={t('connectionType')} value={typeFilter} onChange={(event) => setTypeFilter(event.currentTarget.value)}><option value="all">{t('connectionType')}: {t('all')}</option>{types.map((type) => <option value={type} key={type}>{type}</option>)}</select>
+        <select className="du-select du-select-sm" aria-label={t('outbound')} value={actionFilter} onChange={(event) => setActionFilter(event.currentTarget.value)}><option value="all">{t('outbound')}: {t('all')}</option>{actions.map((action) => <option value={action} key={action}>{action}</option>)}</select>
       </div>
       {capabilities.features?.ruleMutation !== true && <p className="muted dashboard-capability-note">{t('runtimeRulesReadOnly')}</p>}
       {query.loading && !query.data && <Loading />}
       {query.error && <ErrorPanel error={query.error} onRetry={query.reload} />}
-      {query.data && rules.length === 0 && <Empty />}
+      {query.data && rules.length === 0 && <Empty>{source.length > 0 ? t('noSearchResults') : t('noData')}</Empty>}
       {query.data && rules.length > 0 && <div className="table-wrap rules-table-wrap"><table className="du-table du-table-sm rules-table">
       <thead><tr><th>{t('index')}</th><th>{t('action')}</th><th>{t('payload')}</th><th>{t('outbound')}</th></tr></thead>
       <tbody>{rules.map((rule) => <tr key={`${rule.index}:${rule.type}:${rule.payload}`}><td>{rule.index}</td><td data-label={t('action')}><code>{rule.type}</code></td><td className="wrap-cell" data-label={t('payload')}>{rule.payload ?? '—'}</td><td data-label={t('outbound')}><strong>{rule.action}</strong></td></tr>)}</tbody>

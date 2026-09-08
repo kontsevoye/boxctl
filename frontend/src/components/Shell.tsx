@@ -14,6 +14,7 @@ import { BoxctlVersion, BoxctlVersionProvider } from './BoxctlVersion'
 import { AmbientBackdrop } from './effects'
 import { Toast } from './Toast'
 import { ThemeToggle } from './ThemeToggle'
+import { LanguageToggle } from './LanguageToggle'
 
 interface NavItem {
   route: Route
@@ -57,7 +58,7 @@ export function shouldRefreshEngineCatalog(previous: EngineStatusIdentity | unde
 
 export function Shell({ route, children }: { route: Route; children: ReactNode }) {
   const { capabilities, engines, refreshCapabilities } = useApp()
-  const { locale, setLocale, t } = useI18n()
+  const { t } = useI18n()
   const items = navigationItems(t)
   const [controlBusy, setControlBusy] = useState('')
   const [controlMessage, setControlMessage] = useState('')
@@ -65,6 +66,7 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
   const [drawerOpen, setDrawerOpen] = useState(false)
   const drawerTrigger = useRef<HTMLButtonElement>(null)
   const drawerClose = useRef<HTMLButtonElement>(null)
+  const drawerPanel = useRef<HTMLElement>(null)
   const drawerWasOpen = useRef(false)
   const observedEngineIdentity = useRef<EngineStatusIdentity | undefined>(undefined)
   const refreshedEngineIdentity = useRef('')
@@ -74,7 +76,7 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
   const coreName = status.data?.core.name || capabilities.coreName
   const coreVersion = status.data?.core.version || capabilities.coreVersion
 
-  useEffect(() => { setDrawerOpen(false) }, [route])
+  useEffect(() => { setDrawerOpen(false); window.scrollTo(0, 0) }, [route])
 
   useEffect(() => {
     const timer = window.setInterval(status.reload, 2_000)
@@ -102,11 +104,37 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
     }
     drawerWasOpen.current = true
     drawerClose.current?.focus()
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setDrawerOpen(false)
+    const handleDrawerKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || document.querySelector('dialog[open]')) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setDrawerOpen(false)
+        return
+      }
+      if (event.key !== 'Tab') return
+      const panel = drawerPanel.current
+      if (!panel) return
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>('a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]'))
+        .filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0)
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (!first || !last) return
+      const outside = !panel.contains(document.activeElement)
+      if (event.shiftKey && (document.activeElement === first || outside)) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (document.activeElement === last || outside)) {
+        event.preventDefault()
+        first.focus()
+      }
     }
-    window.addEventListener('keydown', closeOnEscape)
-    return () => window.removeEventListener('keydown', closeOnEscape)
+    const closeOnNavigation = () => setDrawerOpen(false)
+    window.addEventListener('keydown', handleDrawerKey)
+    window.addEventListener('popstate', closeOnNavigation)
+    return () => {
+      window.removeEventListener('keydown', handleDrawerKey)
+      window.removeEventListener('popstate', closeOnNavigation)
+    }
   }, [drawerOpen])
 
   const signOut = async () => {
@@ -137,6 +165,7 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
 
   return <BoxctlVersionProvider version={status.data?.version} managerUpdate={status.data?.managerUpdate}><div className="du-drawer app-shell">
     <AmbientBackdrop />
+    <a className="skip-link" href="#main-content" hidden={drawerOpen}>{t('skipToContent')}</a>
     <input id="app-navigation" type="checkbox" className="du-drawer-toggle" checked={drawerOpen} aria-hidden="true" tabIndex={-1} onChange={(event) => setDrawerOpen(event.currentTarget.checked)} />
     <section className="du-drawer-content workspace" inert={drawerOpen ? true : undefined}>
       <div className="core-controls" aria-label={t('coreControls')}>
@@ -157,11 +186,11 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
         </div>
       </div>
       {controlMessage && <Toast tone={controlFailed ? 'error' : 'success'} onDismiss={() => setControlMessage('')}>{controlMessage}</Toast>}
-      <main className="content">{children}</main>
+      <main id="main-content" tabIndex={-1} className="content">{children}</main>
     </section>
     <div id="app-navigation-panel" className="du-drawer-side app-navigation">
       <button type="button" aria-label={t('close')} className="du-drawer-overlay" onClick={() => setDrawerOpen(false)} />
-      <aside className="sidebar" role={drawerOpen ? 'dialog' : undefined} aria-modal={drawerOpen ? true : undefined} aria-label={t('navigation')}>
+      <aside ref={drawerPanel} className="sidebar" role={drawerOpen ? 'dialog' : undefined} aria-modal={drawerOpen ? true : undefined} aria-label={t('navigation')}>
         <div className="sidebar-brand-row">
           <button className="brand brand-button" onClick={() => { navigate('/'); setDrawerOpen(false) }} aria-label="boxctl"><Brand /></button>
           <button ref={drawerClose} type="button" className="du-btn du-btn-square du-btn-ghost sidebar-close" aria-label={t('close')} onClick={() => setDrawerOpen(false)}><X size={18} aria-hidden="true" /></button>
@@ -174,19 +203,16 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
                 (item.route === '/config' && route === '/profiles') ||
                 (item.route === '/settings' && route === '/backups') ||
                 (item.route === '/logs' && (route === '/logs/core' || route === '/logs/system'))
-              return <li key={item.route}><button className={active ? 'nav-item active' : 'nav-item'} aria-current={active ? 'page' : undefined} onClick={() => { navigate(item.route); setDrawerOpen(false) }}>
+              return <li key={item.route} className={item.route === '/proxies' ? 'nav-section-start' : undefined}><button className={active ? 'nav-item active' : 'nav-item'} aria-current={active ? 'page' : undefined} onClick={() => { navigate(item.route); setDrawerOpen(false) }}>
                   <span className="nav-glyph" aria-hidden="true"><Icon size={18} strokeWidth={1.8} /></span><span>{item.label}</span>
                 </button></li>
             })}
           </ul>
         </nav>
         <footer className="sidebar-footer">
-          <BoxctlVersion className="sidebar-version" />
+          <BoxctlVersion className="sidebar-version" onNavigate={() => setDrawerOpen(false)} />
           <div className="sidebar-footer-actions">
-            <div className="sidebar-language-switch" role="tablist" aria-label={t('language')}>
-              <button className={locale === 'ru' ? 'active' : ''} type="button" role="tab" aria-selected={locale === 'ru'} onClick={() => setLocale('ru')}>RU</button>
-              <button className={locale === 'en' ? 'active' : ''} type="button" role="tab" aria-selected={locale === 'en'} onClick={() => setLocale('en')}>EN</button>
-            </div>
+            <LanguageToggle />
             <ThemeToggle />
             <button className="sidebar-sign-out" type="button" onClick={signOut}><LogOut size={15} strokeWidth={1.9} aria-hidden="true" /><span>{t('logout')}</span></button>
           </div>

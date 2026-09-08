@@ -125,9 +125,9 @@ function renderRoute(route: Route) {
     case '/profiles': return <ConfigurationPage initialTab="profiles" />
     case '/config': return <ConfigurationPage />
     case '/rule-lists': return <RuleListsPage />
-    case '/backups': return <SettingsRedirect />
+    case '/backups': return <SettingsRedirect section="backups" />
     case '/settings': return <SettingsPage />
-    case '/updates': return <SettingsRedirect />
+    case '/updates': return <SettingsRedirect section="updates" />
     case '/proxies': return <ProxiesPage />
     case '/connections': return <ConnectionsPage />
     case '/rules': return <RulesPage />
@@ -138,7 +138,7 @@ function renderRoute(route: Route) {
   }
 }
 
-function SettingsRedirect() {
-  useEffect(() => navigate('/settings', true), [])
+function SettingsRedirect({ section }: { section: 'backups' | 'updates' }) {
+  useEffect(() => navigate('/settings', true, { section }), [section])
   return <Loading />
 }

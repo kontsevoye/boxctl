@@ -206,7 +206,7 @@
   opacity: .45;
 }
 
-@media (max-width: 1050px) {
+@media (max-width: 1280px) {
   .connections-stream-state {
     min-height: 2rem;
   }

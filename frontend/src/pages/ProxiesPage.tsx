@@ -214,7 +214,7 @@ export function ProxiesPage() {
             {canTestDelay && <button className="proxies-icon-button" disabled={busy !== '' || groups.length === 0} title={t('testLatency')} aria-label={t('testLatency')} onClick={testVisible}>
               <Zap size={18} aria-hidden="true" className={busy === 'delay:*' ? 'spin-icon' : ''} />
             </button>}
-            <button className="proxies-icon-button" title={expandedName ? t('close') : t('groups')} aria-label={expandedName ? t('close') : t('groups')} onClick={() => setExpandedName(expandedName ? null : groups[0]?.name ?? null)}>
+            <button className="proxies-icon-button" title={expandedName ? t('collapseGroups') : t('expandGroup')} aria-label={expandedName ? t('collapseGroups') : t('expandGroup')} onClick={() => setExpandedName(expandedName ? null : groups[0]?.name ?? null)}>
               {expandedName ? <ChevronUp size={18} aria-hidden="true" /> : <ChevronDown size={18} aria-hidden="true" />}
             </button>
           </div>

@@ -26,7 +26,7 @@ describe('boxctl update indicator', () => {
     ))
     expect(legacy).not.toContain('boxctl-update-link')
     expect(update).toContain('boxctl-update-link')
-    expect(update).toContain('href="/settings"')
+    expect(update).toContain('href="/settings?section=updates"')
     expect(update).toContain('aria-label="boxctl update available: v2026.09.3"')
     vi.unstubAllGlobals()
   })

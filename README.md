@@ -9,6 +9,10 @@ Mihomo remains the established core; sing-box support targets the reviewed
 `>=1.14.0,<1.15.0` compatibility window without changing ownership of the
 OpenWrt dataplane.
 
+![boxctl status dashboard in dark mode](docs/images/dashboard-dark.png)
+
+*Status overview in dark mode, shown with demo data.*
+
 ## Features
 
 - built-in English and Russian web interface with password authentication;

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { Check, ChevronDown, Copy, Download, FileUp, Play, RefreshCw, RotateCcw, Save } from 'lucide-react'
 import { APIError, requestWithFallback } from '../api'
 import { requestAppRefresh } from '../app-events'
 import { useApp } from '../app-context'
 import { ErrorPanel, Loading, PageHeader } from '../components/Common'
+import { useConfirm } from '../components/ConfirmDialog'
 import { Toast, type ToastTone } from '../components/Toast'
 import { YamlEditor } from '../components/YamlEditor'
 import { legacyEngine } from '../engines'
@@ -30,6 +32,7 @@ interface ConfigNotice { tone: ToastTone; message: string; diagnostics?: Diagnos
 export function RawConfigPage({ embedded = false, engine, initialProfileID = '', onDirtyChange }: { embedded?: boolean; engine?: EngineInfo; initialProfileID?: string; onDirtyChange?: (dirty: boolean) => void }) {
   const app = useApp()
   const { t } = useI18n()
+  const confirm = useConfirm()
   const profilesQuery = useQuery<Profile[]>('/profiles')
   const profiles = profilesQuery.data?.filter((profile) => !engine || profile.engine === engine.id) ?? []
   const [profileID, setProfileID] = useState(initialProfileID)
@@ -139,7 +142,7 @@ export function RawConfigPage({ embedded = false, engine, initialProfileID = '',
   }
 
   const activate = async () => {
-    if (!profile || !canActivate || !window.confirm(t('confirmActivateProfile'))) return
+    if (!profile || !canActivate || !await confirm({ title: profile.name, description: t('confirmActivateProfile'), confirmLabel: t('activate'), tone: 'warning' })) return
     setBusy('activate')
     setError(undefined)
     setNotice(undefined)
@@ -171,6 +174,7 @@ export function RawConfigPage({ embedded = false, engine, initialProfileID = '',
     setError(undefined)
     try {
       await copyRawConfig(content, navigator.clipboard)
+      setNotice({ tone: 'success', message: t('configCopied'), timeoutMs: 3000 })
     } catch {
       setError(new APIError(0, 'clipboard_failed', t('copyFailed')))
     }
@@ -186,24 +190,28 @@ export function RawConfigPage({ embedded = false, engine, initialProfileID = '',
     URL.revokeObjectURL(url)
   }
 
-  const actions = <>
-    <input ref={fileInput} className="visually-hidden" type="file" accept={configFileAccept(engine ?? profile)} onChange={(event) => void importConfig(event.currentTarget.files?.[0])} />
-    <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== '' || !query.data} onClick={() => fileInput.current?.click()}>{t('importConfig')}</button>
-    <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={() => void copyConfig()}>{t('copy')}</button>
-    <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={downloadConfig}>{t('downloadFile')}</button>
-    <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={query.reload}>{t('refresh')}</button>
-  </>
+  const changeProfile = async (next: string) => {
+    if (next === profile?.id) return
+    if (content !== savedContent && !await confirm({ title: t('discardUnsavedConfig'), confirmLabel: t('discardChanges'), tone: 'warning' })) return
+    setProfileID(next)
+  }
+
+  const actions = <details className="config-file-actions">
+    <summary>{t('configurationFiles')}<ChevronDown size={15} aria-hidden="true" /></summary>
+    <div>
+      <input ref={fileInput} hidden type="file" accept={configFileAccept(engine ?? profile)} onChange={(event) => void importConfig(event.currentTarget.files?.[0])} />
+      <button className="du-btn du-btn-ghost du-btn-sm" disabled={busy !== '' || !query.data} onClick={() => fileInput.current?.click()}><FileUp size={15} aria-hidden="true" />{t('importConfig')}</button>
+      <button className="du-btn du-btn-ghost du-btn-sm" disabled={busy !== ''} onClick={() => void copyConfig()}><Copy size={15} aria-hidden="true" />{t('copy')}</button>
+      <button className="du-btn du-btn-ghost du-btn-sm" disabled={busy !== ''} onClick={downloadConfig}><Download size={15} aria-hidden="true" />{t('downloadFile')}</button>
+      <button className="du-btn du-btn-ghost du-btn-sm" disabled={busy !== ''} onClick={query.reload}><RefreshCw size={15} aria-hidden="true" />{t('refresh')}</button>
+    </div>
+  </details>
 
   return <>
-    {embedded
-      ? <div className="page-actions configuration-tab-actions">{actions}</div>
-      : <PageHeader title={t('rawConfig')} actions={actions} />}
+    {!embedded && <PageHeader title={t('rawConfig')} />}
     {profilesQuery.loading && !profilesQuery.data && <Loading />}
     {profilesQuery.error && <ErrorPanel error={profilesQuery.error} onRetry={profilesQuery.reload} />}
-    {profiles.length > 0 && <label className="config-profile-select"><span>{t('profile')}</span><select className="du-select du-select-sm" value={profile?.id ?? ''} onChange={(event) => {
-      if (content !== savedContent && !window.confirm(t('discardUnsavedConfig'))) return
-      setProfileID(event.currentTarget.value)
-    }}>{profiles.map((item) => <option value={item.id} key={item.id}>{item.name}{item.active ? ` · ${t('active')}` : ''}</option>)}</select></label>}
+    <div className="config-editor-source-row">{profiles.length > 0 && <label className="config-profile-select"><span>{t('profile')}</span><select className="du-select du-select-sm" disabled={busy !== ''} value={profile?.id ?? ''} onChange={(event) => void changeProfile(event.currentTarget.value)}>{profiles.map((item) => <option value={item.id} key={item.id}>{item.name}{item.active ? ` · ${t('active')}` : ''}</option>)}</select></label>}{actions}</div>
     {profilesQuery.data && profiles.length === 0 && !legacyConfig && <div className="du-alert">{t('noEngineProfiles')}</div>}
     {query.loading && !query.data && <Loading />}
     {query.error && <ErrorPanel error={query.error} onRetry={query.reload} />}
@@ -213,20 +221,22 @@ export function RawConfigPage({ embedded = false, engine, initialProfileID = '',
       {notice.diagnostics?.map((item) => <span key={`${item.line}:${item.column}:${item.message}`}>{item.line ? `${item.line}:${item.column ?? 1} ` : ''}{item.message}</span>)}
     </Toast>}
     {query.data && <section className="du-card panel editor-panel">
-      <div className="editor-toolbar"><span>{rawConfigFormatLabel(query.data.format)} · {revision}{query.data.pending ? ` · ${t('pendingRestart')}` : ''}</span><div>
-        {profile && <button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== '' || !canActivate} title={profile.active ? t('active') : profileEngine?.installed !== true || profileEngine.compatible !== true ? t('engineUnavailable') : content !== savedContent ? t('saveBeforeActivate') : undefined} onClick={() => void activate()}>{t('activate')}</button>}
-        <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== '' || content === savedContent} onClick={() => { setContent(savedContent); setValidation(undefined); setNotice(undefined) }}>{t('revert')}</button>
-        <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={validate}>{t('validate')}</button>
-        <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== '' || validation?.valid === false || content === savedContent} onClick={() => void save('save')}>{t('saveOnly')}</button>
-        {reloadSupported && <button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== '' || validation?.valid === false || content === savedContent} onClick={() => void save('reload')}>{t('saveReload')}</button>}
+      <div className="editor-toolbar config-editor-toolbar"><div className="config-editor-state"><strong>{rawConfigFormatLabel(query.data.format)}</strong><span className={content !== savedContent ? 'config-draft-state' : ''} role="status">{content !== savedContent ? t('settingsUnsaved') : t('saved')}{query.data.pending ? ` · ${t('pendingRestart')}` : ''}</span></div><div className="config-editor-primary-actions">
+        <button className="du-btn du-btn-ghost du-btn-sm" disabled={busy !== ''} onClick={validate}><Check size={15} aria-hidden="true" />{t('validate')}</button>
+        <button className={`du-btn ${reloadSupported ? 'du-btn-outline' : 'du-btn-primary'} du-btn-sm`} disabled={busy !== '' || validation?.valid === false || content === savedContent} onClick={() => void save('save')}><Save size={15} aria-hidden="true" />{t('saveOnly')}</button>
+        {reloadSupported && <button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== '' || validation?.valid === false || content === savedContent} onClick={() => void save('reload')}><RefreshCw size={15} aria-hidden="true" />{t('saveReload')}</button>}
+      </div><details className="config-more-actions config-editor-more"><summary>{t('moreActions')}<ChevronDown size={15} aria-hidden="true" /></summary><div>
+        <button className="du-btn du-btn-ghost du-btn-sm" disabled={busy !== '' || content === savedContent} onClick={() => { setContent(savedContent); setValidation(undefined); setNotice(undefined) }}><RotateCcw size={15} aria-hidden="true" />{t('revert')}</button>
+        {profile && <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== '' || !canActivate} title={profile.active ? t('active') : profileEngine?.installed !== true || profileEngine.compatible !== true ? t('engineUnavailable') : content !== savedContent ? t('saveBeforeActivate') : undefined} onClick={() => void activate()}><Play size={14} aria-hidden="true" />{t('activate')}</button>}
         <button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== '' || validation?.valid === false || content === savedContent} onClick={() => void save('restart')}>{t('saveRestart')}</button>
-      </div></div>
+      </div></details></div>
       <YamlEditor
         value={content}
         onChange={(value) => { setContent(value); setValidation(undefined); setNotice(undefined) }}
         ariaLabel={t('configEditor')}
         format={(query.data.format ?? engine?.configFormat ?? (profile?.engine === 'sing-box' ? 'json' : 'yaml')) === 'json' ? 'json' : 'yaml'}
       />
+      <footer className="config-editor-footer"><span>{t('revision')}</span><code>{revision}</code></footer>
     </section>}
   </>
 }

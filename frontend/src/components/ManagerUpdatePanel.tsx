@@ -5,10 +5,12 @@ import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
 import { boxctlUpdateURL, formatBoxctlVersion } from './BoxctlVersion'
 import { ErrorPanel, Loading } from './Common'
+import { useConfirm } from './ConfirmDialog'
 import type { ManagerUpdateJob, ManagerUpdateView } from '../types'
 
 export function ManagerUpdatePanel() {
   const { t } = useI18n()
+  const confirm = useConfirm()
   const query = useQuery<ManagerUpdateView>('/manager/update')
   const [view, setView] = useState<ManagerUpdateView>()
   const [busy, setBusy] = useState('')
@@ -40,7 +42,7 @@ export function ManagerUpdatePanel() {
     finally { setBusy('') }
   }
   const install = async (allowFullRestart = false) => {
-    if (allowFullRestart && !window.confirm(t('boxctlFullRestartConfirm'))) return
+    if (allowFullRestart && !await confirm({ title: t('boxctlFullRestartUpdate'), description: t('boxctlFullRestartConfirm'), confirmLabel: t('boxctlFullRestartUpdate'), tone: 'warning' })) return
     setBusy('install')
     setError(undefined)
     try {

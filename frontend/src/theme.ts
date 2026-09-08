@@ -43,3 +43,20 @@ export function applyTheme(value: string): Theme {
 export function initializeTheme(): Theme {
   return applyTheme(currentTheme())
 }
+
+// Read the applied appearance so reloads and other theme controls cannot leave
+// a mounted toggle describing a different theme from the document.
+function appliedTheme(): Theme {
+  const theme = document.documentElement.dataset.theme
+  return theme === 'light' || theme === 'dark' ? theme : 'system'
+}
+
+function subscribeAppliedTheme(onChange: () => void): () => void {
+  const observer = new MutationObserver(onChange)
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+  return () => observer.disconnect()
+}
+
+export function useTheme(): Theme {
+  return useSyncExternalStore(subscribeAppliedTheme, appliedTheme, () => 'system')
+}

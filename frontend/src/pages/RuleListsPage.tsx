@@ -4,6 +4,7 @@ import { APIError, request } from '../api'
 import { useApp } from '../app-context'
 import { canPerform } from '../capabilities'
 import { Badge, Empty, ErrorPanel, formatDate, Loading, PageHeader } from '../components/Common'
+import { useConfirm } from '../components/ConfirmDialog'
 import { legacyEngine, resourcesForEngine, selectedEngine } from '../engines'
 import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
@@ -23,6 +24,7 @@ export function RuleListsPage() {
   const { capabilities, engines: catalog } = useApp()
   const engine = selectedEngine(catalog && catalog.length > 0 ? catalog : [legacyEngine(capabilities)])
   const { t } = useI18n()
+  const confirm = useConfirm()
   const query = useQuery<RuleList[]>('/rule-lists')
   const [selectedID, setSelectedID] = useState<string>()
   const [form, setForm] = useState<RuleListForm>(emptyForm)
@@ -88,7 +90,7 @@ export function RuleListsPage() {
   }
 
   const remove = async (list: RuleList) => {
-    if (!window.confirm(t('confirmDeleteRuleList'))) return
+    if (!await confirm({ title: t('confirmDeleteRuleList'), description: list.name, confirmLabel: t('delete'), tone: 'danger' })) return
     setBusy(`delete:${list.id}`)
     setError(undefined)
     try {
@@ -122,15 +124,17 @@ export function RuleListsPage() {
     }
   }
 
-  const editor = (list?: RuleList) => <form className="rule-list-editor" onSubmit={save}>
-    <label>{t('ruleListName')}<input className="du-input du-input-sm" value={form.name} maxLength={128} required onInput={(event) => setForm({ ...form, name: event.currentTarget.value })} /></label>
-    <div className="rule-prefix-toolbar" aria-label={t('rulePrefixes')}>{rulePrefixes.map((prefix) => <button className="du-btn du-btn-ghost du-btn-sm" type="button" key={prefix} onClick={() => setForm({ ...form, content: appendRulePrefix(form.content, prefix) })}>{prefix}</button>)}</div>
-    <small>{t('autoPrefixHint')}</small>
-    <label className="grow">{t('content')}<textarea className="du-textarea rule-content-editor" spellCheck={false} value={form.content} onInput={(event) => setForm({ ...form, content: event.currentTarget.value })} /></label>
-    {!creating && <small>{t('revision')}: <code>{form.revision}</code></small>}
+  const editor = (list?: RuleList) => <form className="rule-list-editor" id={list ? `rule-list-editor-${encodeURIComponent(list.id)}` : undefined} onSubmit={save}>
+    <label className="rule-list-name-field">{t('ruleListName')}<input className="du-input du-input-sm" value={form.name} maxLength={128} required onInput={(event) => setForm({ ...form, name: event.currentTarget.value })} /></label>
+    <div className="rule-list-content-field">
+      <label htmlFor="rule-list-content">{t('content')}</label>
+      <div className="rule-prefix-toolbar" role="group" aria-label={t('rulePrefixes')}>{rulePrefixes.map((prefix) => <button className="du-btn du-btn-ghost du-btn-sm" type="button" key={prefix} onClick={() => setForm({ ...form, content: appendRulePrefix(form.content, prefix) })}>{prefix}</button>)}</div>
+      <textarea id="rule-list-content" className="du-textarea rule-content-editor" aria-describedby="rule-list-prefix-hint" spellCheck={false} value={form.content} onInput={(event) => setForm({ ...form, content: event.currentTarget.value })} />
+      <small id="rule-list-prefix-hint">{t('autoPrefixHint')}</small>
+    </div>
     <div className="form-actions rule-list-form-actions">
       {list && canPerform(capabilities, 'deleteRuleList') && <button className="du-btn du-btn-error du-btn-soft du-btn-sm" type="button" disabled={busy !== ''} onClick={() => void remove(list)}><Trash2 size={16} aria-hidden="true" /> {t('delete')}</button>}
-      <span className="rule-list-action-spacer" />
+      <span className="rule-list-action-spacer">{!creating && <small>{t('revision')}: <code>{form.revision}</code></small>}</span>
       <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={busy !== ''} onClick={() => { setSelectedID(undefined); setCreating(false); setError(undefined) }}>{t('cancel')}</button>
       <button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== '' || (!creating && !canPerform(capabilities, 'editRuleList'))}>{busy === 'save' ? t('saving') : t('save')}</button>
     </div>
@@ -170,17 +174,20 @@ export function RuleListsPage() {
                 className="rule-list-toggle"
                 type="button"
                 aria-expanded={expanded}
+                aria-controls={`rule-list-editor-${encodeURIComponent(list.id)}`}
                 disabled={busy !== ''}
                 onClick={() => toggle(list)}
               >
                 {expanded ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronRight size={18} aria-hidden="true" />}
                 <span className="rule-list-title">
-                  <strong>{list.name}</strong>
+                  <strong title={list.name}>{list.name}</strong>
                   <span className="rule-list-meta">
-                    <span>{t('rulesCount')}: {list.ruleCount ?? 0}</span>
-                    {list.inConfig && <Badge tone="good">{t('inConfig')}</Badge>}
-                    {list.inUse && <Badge tone="warning">{t('inUse')}</Badge>}
-                    {list.configNameTaken && <Badge tone="warning">{t('providerNameTaken')}</Badge>}
+                    <span className="rule-list-count">{t('rulesCount')}: <b>{list.ruleCount ?? 0}</b></span>
+                    <span className="rule-list-statuses">
+                      {list.inConfig && <Badge>{t('inConfig')}</Badge>}
+                      {list.inUse && <Badge tone="good">{t('inUse')}</Badge>}
+                      {list.configNameTaken && <Badge tone="warning">{t('providerNameTaken')}</Badge>}
+                    </span>
                   </span>
                 </span>
               </button>

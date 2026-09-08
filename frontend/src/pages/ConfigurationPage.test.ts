@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { AppContext } from '../app-context'
 import { I18nProvider } from '../i18n'
+import { ConfirmProvider } from '../components/ConfirmDialog'
 import { activateConfigurationTab, ConfigurationPage, configurationRouteTarget, configurationTabs } from './ConfigurationPage'
 
 describe('configurationTabs', () => {
@@ -31,7 +32,7 @@ describe('configurationTabs', () => {
           refreshCapabilities: async () => undefined,
           session: { authenticated: true, user: { id: 'admin' }, csrfToken: 'token', expiresAt: '' },
         },
-      }, createElement(ConfigurationPage, { initialTab: 'profiles' })),
+      }, createElement(ConfirmProvider, null, createElement(ConfigurationPage, { initialTab: 'profiles' }))),
     ))
     expect(markup).toContain('id="configuration-profiles"')
     expect(markup).not.toContain('id="configuration-subscriptions"')

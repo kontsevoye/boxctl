@@ -1,6 +1,8 @@
 import { useState } from 'react'
+import { ChevronDown, PencilLine, Plus, RefreshCw } from 'lucide-react'
 import { APIError, request } from '../api'
 import { Badge, Empty, ErrorPanel, formatBytes, formatDate, Loading } from '../components/Common'
+import { useConfirm } from '../components/ConfirmDialog'
 import { resourcesForEngine } from '../engines'
 import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
@@ -30,6 +32,7 @@ export function subscriptionRequestHeaders(values: HeaderValues): Record<string,
 
 export function ProxySubscriptionsPage({ engine }: { engine?: EngineInfo }) {
   const { locale, t } = useI18n()
+  const confirm = useConfirm()
   const query = useQuery<ProxySubscription[]>('/proxy-subscriptions')
   const [name, setName] = useState('')
   const [sourceKind, setSourceKind] = useState<'remote' | 'share-links'>('remote')
@@ -65,7 +68,7 @@ export function ProxySubscriptionsPage({ engine }: { engine?: EngineInfo }) {
   }
 
   const mutate = async (item: ProxySubscription, action: 'refresh' | 'toggle' | 'delete') => {
-    if (action === 'delete' && !window.confirm(t('confirmDeleteSubscription'))) return
+    if (action === 'delete' && !await confirm({ title: item.name, description: t('confirmDeleteSubscription'), confirmLabel: t('delete'), tone: 'danger' })) return
     setBusy(`${action}:${item.id}`)
     setError(undefined)
     try {
@@ -110,23 +113,23 @@ export function ProxySubscriptionsPage({ engine }: { engine?: EngineInfo }) {
 
   return <>
     {error && <ErrorPanel error={error} />}
-    <section className="du-card panel subscription-create-panel">
-      <h2>{t('addProxySubscription')}</h2>
+    <details className="du-card panel subscription-create-panel config-create-panel" open={subscriptions?.length === 0 ? true : undefined}>
+      <summary><span><Plus size={18} aria-hidden="true" />{t('addProxySubscription')}</span><ChevronDown size={18} aria-hidden="true" /></summary>
       <form className="subscription-form" onSubmit={create}>
         <label>{t('profileName')}<input className="du-input du-input-sm" value={name} onInput={(event) => setName(event.currentTarget.value)} maxLength={128} required /></label>
         <label>{t('subscriptionSourceType')}<select className="du-select du-select-sm" value={sourceKind} onChange={(event) => setSourceKind(event.currentTarget.value as 'remote' | 'share-links')}><option value="remote">{t('remoteURL')}</option><option value="share-links">{t('shareLinks')}</option></select></label>
         {sourceKind === 'remote' && <label>{t('updateInterval')}<input className="du-input du-input-sm" type="number" min="1" max="168" value={interval} placeholder="auto" onInput={(event) => setInterval(event.currentTarget.value === '' ? '' : event.currentTarget.valueAsNumber)} /><small>{t('updateIntervalHint')}</small></label>}
         <label className="full">{sourceKind === 'remote' ? t('sourceURL') : t('shareLinks')}<textarea className="du-textarea du-textarea-sm" rows={sourceKind === 'remote' ? 2 : 5} value={source} onInput={(event) => setSource(event.currentTarget.value)} autoComplete="off" required /><small>{t('subscriptionSecretHint')}</small></label>
-        {sourceKind === 'remote' && headerFields.map((header) => <label key={header.name}>{t(header.label)}<input className="du-input du-input-sm" value={headers[header.field]} onInput={(event) => setHeaders({ ...headers, [header.field]: event.currentTarget.value })} autoComplete="off" /></label>)}
-        <div className="form-actions full"><button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== ''}>{t('addProxySubscription')}</button></div>
+        {sourceKind === 'remote' && <details className="config-optional-fields full"><summary>{t('customHeaders')}<ChevronDown size={15} aria-hidden="true" /></summary><div className="subscription-header-fields">{headerFields.map((header) => <label key={header.name}>{t(header.label)}<input className="du-input du-input-sm" value={headers[header.field]} onInput={(event) => setHeaders({ ...headers, [header.field]: event.currentTarget.value })} autoComplete="off" /></label>)}</div></details>}
+        <div className="form-actions full"><button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== ''}><Plus size={15} aria-hidden="true" />{t('addProxySubscription')}</button></div>
       </form>
-    </section>
+    </details>
     {query.loading && !query.data && <Loading />}
     {query.error && <ErrorPanel error={query.error} onRetry={query.reload} />}
     {subscriptions && subscriptions.length === 0 && <Empty />}
-    {subscriptions && <div className="card-list">{subscriptions.map((item) => <article className="du-card profile-card subscription-card" key={item.id}>
+    {subscriptions && <div className="card-list config-resource-list">{subscriptions.map((item) => <article className="du-card profile-card subscription-card config-resource-card" key={item.id}>
       <div className="profile-main">
-        <div className="title-row"><h2>{item.name}</h2><Badge>{item.sourceKind}</Badge><Badge tone={item.enabled ? 'good' : 'warning'}>{item.enabled ? t('enabled') : t('disabled')}</Badge></div>
+        <div className="title-row"><h2>{item.name}</h2><span className="config-resource-badges"><Badge>{item.sourceKind}</Badge><Badge tone={item.enabled ? 'good' : 'warning'}>{item.enabled ? t('enabled') : t('disabled')}</Badge></span></div>
         <dl className="inline-details">
           <div><dt>{t('providerName')}</dt><dd><code>{item.providerName}</code></dd></div>
           <div><dt>{t('nodes')}</dt><dd>{item.proxyCount || 0}</dd></div>
@@ -138,21 +141,21 @@ export function ProxySubscriptionsPage({ engine }: { engine?: EngineInfo }) {
           {item.expiresAt && <div><dt>{t('expires')}</dt><dd>{formatDate(item.expiresAt, locale)}</dd></div>}
           {!!item.headerNames?.length && <div><dt>{t('customHeaders')}</dt><dd>{item.headerNames.join(', ')}</dd></div>}
         </dl>
-        <small className="muted subscription-use-hint">{t('providerUseHint')}: <code>use: [{item.providerName}]</code></small>
+        <details className="config-optional-fields config-provider-help"><summary>{t('configuration')}<ChevronDown size={15} aria-hidden="true" /></summary><small className="muted subscription-use-hint">{t('providerUseHint')}: <code>use: [{item.providerName}]</code></small></details>
         {item.lastError && <p className="field-error">{item.lastError}</p>}
-        {editing === item.id && <form className="profile-source-form" onSubmit={(event) => saveEdit(event, item)}>
+        {editing === item.id && <form id={`subscription-source-${item.id}`} className="profile-source-form" onSubmit={(event) => saveEdit(event, item)}>
           <label>{t('profileName')}<input className="du-input du-input-sm" value={editName} onInput={(event) => setEditName(event.currentTarget.value)} required /></label>
           {item.sourceKind === 'remote' && <label>{t('updateInterval')}<input className="du-input du-input-sm" type="number" min="1" max="168" value={editInterval} placeholder="auto" onInput={(event) => setEditInterval(event.currentTarget.value === '' ? '' : event.currentTarget.valueAsNumber)} /><small>{t('updateIntervalHint')}</small></label>}
           <label className="grow">{t('replacementSource')}<textarea className="du-textarea du-textarea-sm" rows={2} value={replacement} onInput={(event) => setReplacement(event.currentTarget.value)} /><small>{t('replacementSourceHint')}</small></label>
-          {item.sourceKind === 'remote' && <div className="subscription-header-editor grow">
+          {item.sourceKind === 'remote' && <details className="subscription-header-editor grow config-optional-fields"><summary>{t('customHeaders')}<ChevronDown size={15} aria-hidden="true" /></summary>
             <small>{t('replacementHeadersHint')}</small>
             <div className="subscription-header-fields">{headerFields.map((header) => <label key={header.name}>{t(header.label)}<input className="du-input du-input-sm" value={editHeaders[header.field]} onInput={(event) => setEditHeaders({ ...editHeaders, [header.field]: event.currentTarget.value })} autoComplete="off" /></label>)}</div>
             {!!item.headerNames?.length && <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={clearHeaders} onChange={(event) => setClearHeaders(event.currentTarget.checked)} /> {t('clearHeaders')}</label>}
-          </div>}
-          <button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== ''}>{t('save')}</button><button type="button" className="du-btn du-btn-ghost du-btn-sm" onClick={() => setEditing('')}>{t('cancel')}</button>
+          </details>}
+          <div className="form-actions config-inline-form-actions"><button type="button" className="du-btn du-btn-ghost du-btn-sm" disabled={busy !== ''} onClick={() => setEditing('')}>{t('cancel')}</button><button className="du-btn du-btn-primary du-btn-sm" disabled={busy !== ''}>{t('save')}</button></div>
         </form>}
       </div>
-      <div className="card-actions"><button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={() => mutate(item, 'refresh')}>{t('refresh')}</button><button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={() => mutate(item, 'toggle')}>{item.enabled ? t('disable') : t('enable')}</button><button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={() => beginEdit(item)}>{t('editSource')}</button><button className="du-btn du-btn-error du-btn-soft du-btn-sm" disabled={busy !== ''} onClick={() => mutate(item, 'delete')}>{t('delete')}</button></div>
+      <div className="card-actions config-card-actions"><button className="du-btn du-btn-ghost du-btn-sm" disabled={busy !== ''} onClick={() => mutate(item, 'refresh')}><RefreshCw size={15} aria-hidden="true" />{t('refresh')}</button><button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} aria-expanded={editing === item.id} aria-controls={`subscription-source-${item.id}`} onClick={() => editing === item.id ? setEditing('') : beginEdit(item)}><PencilLine size={15} aria-hidden="true" />{t('editSource')}</button><details className="config-more-actions"><summary>{t('moreActions')}<ChevronDown size={15} aria-hidden="true" /></summary><div><button className="du-btn du-btn-outline du-btn-sm" disabled={busy !== ''} onClick={() => mutate(item, 'toggle')}>{item.enabled ? t('disable') : t('enable')}</button><span className="config-destructive-actions"><button className="du-btn du-btn-error du-btn-soft du-btn-sm" disabled={busy !== ''} onClick={() => mutate(item, 'delete')}>{t('delete')}</button></span></div></details></div>
     </article>)}</div>}
   </>
 }

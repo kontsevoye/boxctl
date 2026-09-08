@@ -16,7 +16,7 @@ export function BoxctlVersionProvider({ version, managerUpdate, children }: { ve
   return <BoxctlVersionContext.Provider value={{ version, managerUpdate }}>{children}</BoxctlVersionContext.Provider>
 }
 
-export function BoxctlVersion({ className = '' }: { className?: string }) {
+export function BoxctlVersion({ className = '', onNavigate }: { className?: string; onNavigate?: () => void }) {
   const { t } = useI18n()
   const context = useContext(BoxctlVersionContext)
   const version = formatBoxctlVersion(context.version)
@@ -31,7 +31,13 @@ export function BoxctlVersion({ className = '' }: { className?: string }) {
       <span>boxctl</span>
       <strong>{version}</strong>
     </span>
-    {update && <a className="boxctl-update-link" href="/settings" onClick={(event) => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); navigate('/settings') } }} title={updateLabel} aria-label={updateLabel}>
+    {update && <a className="boxctl-update-link" href="/settings?section=updates" onClick={(event) => {
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return
+      event.preventDefault()
+      navigate('/settings', false, { section: 'updates' })
+      onNavigate?.()
+      window.scrollTo(0, 0)
+    }} title={updateLabel} aria-label={updateLabel}>
       <CircleArrowUp size={17} strokeWidth={2} aria-hidden="true" />
     </a>}
   </div>

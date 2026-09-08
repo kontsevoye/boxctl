@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { Capabilities, Settings } from '../types'
-import { externalDashboardSupported, isCleanCoreInstall, parsePorts, settingsPortListErrors, settingsUpdatePayload } from './SettingsPage'
+import { externalDashboardSupported, isCleanCoreInstall, parsePorts, settingsPortListErrors, settingsUpdatePayload, reconcileSettingsDraft, refreshSettingsInterfaces, settingsDraftDirty, settingsSectionFromSearch } from './SettingsPage'
+
+describe('settings section availability', () => {
+  it('keeps a reachable selected panel when backup capability is unavailable', () => {
+    expect(settingsSectionFromSearch('?section=backups', false)).toBe('general')
+    expect(settingsSectionFromSearch('?section=backups', true)).toBe('backups')
+    expect(settingsSectionFromSearch('?section=updates', false)).toBe('updates')
+    expect(settingsSectionFromSearch('?section=routing', false)).toBe('routing')
+    expect(settingsSectionFromSearch('?section=unknown', true)).toBe('general')
+    expect(settingsSectionFromSearch('', true)).toBe('general')
+  })
+})
 
 describe('settings update payload', () => {
 	it('keeps dashboard settings reachable when the engine supports integration', () => {
@@ -139,5 +150,85 @@ describe('settings update payload', () => {
       bypassTCPPorts: '', bypassUDPPorts: '', proxyOnlyTCPPorts: '', proxyOnlyUDPPorts: '',
     }
     expect(settingsUpdatePayload(settings, lists)).toMatchObject({ tunAddress: '172.19.0.1/30', tunMTU: 9000 })
+  })
+})
+
+
+describe('settings draft refresh', () => {
+  const saved: Settings = {
+    language: 'en', theme: 'system', logLevel: 'info', updateChannel: 'stable',
+    captureMode: 'tproxy', startOnBoot: true, autoUpdate: false,
+    includedInterfaces: ['br-lan'], bypassTCPPorts: [22], maintenanceIntervalMinutes: 30,
+    interfaces: [{ name: 'br-lan', role: 'lan' }], interfaceSource: 'ubus',
+  }
+
+  it('preserves edited values while accepting fresh values in untouched fields', () => {
+    const current = reconcileSettingsDraft(undefined, saved)
+    current.form = { ...current.form, logLevel: 'debug' }
+    current.listText.bypassTCPPorts = '80, 443'
+    const incoming = { ...saved, startOnBoot: false, includedInterfaces: ['br-iot'], bypassTCPPorts: [53] }
+    const merged = reconcileSettingsDraft(current, incoming)
+    expect(merged.form).toMatchObject({ logLevel: 'debug', startOnBoot: false })
+    expect(merged.listText.bypassTCPPorts).toBe('80, 443')
+    expect(merged.listText.includedInterfaces).toBe('br-iot')
+    expect(merged.saved).toEqual(incoming)
+    expect(settingsDraftDirty(merged.form, merged.listText, merged.saved)).toBe(true)
+  })
+
+  it('rescans discovery data without replacing unsaved or saved settings', () => {
+    const current = reconcileSettingsDraft(undefined, saved)
+    current.form = { ...current.form, logLevel: 'debug' }
+    current.listText.includedInterfaces = 'br-lan, br-iot'
+    const latest: Settings = {
+      ...saved, logLevel: 'error', captureMode: 'tun', includedInterfaces: ['other'],
+      interfaces: [{ name: 'br-iot', role: 'lan' }], interfaceSource: 'netlink',
+    }
+    const merged = refreshSettingsInterfaces(current, latest)
+    expect(merged.form.logLevel).toBe('debug')
+    expect(merged.saved.logLevel).toBe('info')
+    expect(merged.form.captureMode).toBe('tproxy')
+    expect(merged.listText.includedInterfaces).toBe('br-lan, br-iot')
+    expect(merged.form.interfaces).toEqual(latest.interfaces)
+    expect(merged.saved.interfaceSource).toBe('netlink')
+  })
+
+  it('keeps invalid text during refresh and treats it as unsaved', () => {
+    const current = reconcileSettingsDraft(undefined, saved)
+    current.listText.proxyOnlyUDPPorts = 'invalid port'
+    const merged = reconcileSettingsDraft(current, { ...saved, autoUpdate: true })
+    expect(merged.listText.proxyOnlyUDPPorts).toBe('invalid port')
+    expect(settingsDraftDirty(merged.form, merged.listText, merged.saved)).toBe(true)
+  })
+
+  it('recognizes equivalent valid port formatting as unchanged', () => {
+    const current = reconcileSettingsDraft(undefined, saved)
+    current.listText.bypassTCPPorts = '22,22'
+    expect(settingsDraftDirty(current.form, current.listText, saved)).toBe(false)
+    current.form = { ...current.form, maintenanceIntervalMinutes: Number.NaN }
+    expect(settingsDraftDirty(current.form, current.listText, saved)).toBe(true)
+  })
+
+  it('accepts fresh list values after formatting-only edits while retaining other edits', () => {
+    const current = reconcileSettingsDraft(undefined, saved)
+    current.form = { ...current.form, logLevel: 'debug' }
+    current.listText.bypassTCPPorts = '22,22'
+    current.listText.includedInterfaces = ' br-lan, '
+    const incoming = { ...saved, bypassTCPPorts: [53], includedInterfaces: ['br-iot'] }
+    const merged = reconcileSettingsDraft(current, incoming)
+    expect(merged.listText.bypassTCPPorts).toBe('53')
+    expect(merged.listText.includedInterfaces).toBe('br-iot')
+    expect(merged.form.logLevel).toBe('debug')
+    expect(settingsDraftDirty(merged.form, merged.listText, merged.saved)).toBe(true)
+    merged.form = { ...merged.form, logLevel: 'info' }
+    expect(settingsDraftDirty(merged.form, merged.listText, merged.saved)).toBe(false)
+  })
+
+  it('adopts an engine capture change only when the user did not edit capture mode', () => {
+    const current = reconcileSettingsDraft(undefined, saved)
+    current.form = { ...current.form, logLevel: 'debug' }
+    const incoming = { ...saved, captureMode: 'tun' }
+    expect(reconcileSettingsDraft(current, incoming).form.captureMode).toBe('tun')
+    current.form.captureMode = 'redirect'
+    expect(reconcileSettingsDraft(current, incoming).form.captureMode).toBe('redirect')
   })
 })
