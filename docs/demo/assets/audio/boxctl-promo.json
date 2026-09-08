@@ -1,0 +1,12 @@
+{
+  "duration_seconds": 30.0,
+  "sample_rate": 48000,
+  "channels": 2,
+  "bit_depth": 16,
+  "bpm": 80,
+  "seed": 20260908,
+  "integrated_lufs": -16.09,
+  "true_peak_dbtp": -3.19,
+  "loudness_range_lu": 1.6,
+  "sha256": "2f984d66be9febb0218998c6bce5aa89174a202c2345fb84bde306c3192c1cd7"
+}

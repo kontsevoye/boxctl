@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>boxctl — Your network. Your rules.</title>
+    <link rel="stylesheet" href="film.css" />
+  </head>
+  <body>
+    <main
+      id="film"
+      data-composition-id="boxctl"
+      data-start="0"
+      data-duration="30"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div class="atmosphere">
+        <div class="halo halo-a"></div>
+        <div class="halo halo-b"></div>
+        <div class="grid"></div>
+      </div>
+      <header class="identity">
+        <svg class="brand-cube" viewBox="0 0 48 48" fill="none">
+          <path
+            d="m24 4 18 10v20L24 44 6 34V14L24 4Z M6 14l18 10 18-10 M24 24v20 M15 9l18 10"
+          /></svg
+        ><span>boxctl</span>
+      </header>
+      <div class="edition">
+        OPENWRT, UNDER YOUR CONTROL<span class="live-dot"></span>
+      </div>
+
+      <section id="intro" class="scene">
+        <div class="intro-copy">
+          <div class="eyebrow reveal">MEET YOUR NETWORK’S CONTROL PANEL</div>
+          <h1>
+            <span class="line">Your network.</span
+            ><span class="line accent">Your rules.</span>
+          </h1>
+          <p class="intro-sub reveal">
+            Transparent routing. Beautifully managed.
+          </p>
+        </div>
+        <div class="network-art">
+          <svg viewBox="0 0 900 900" fill="none" class="network-svg">
+            <defs>
+              <linearGradient
+                id="cube-gradient"
+                x1="180"
+                y1="0"
+                x2="760"
+                y2="880"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop stop-color="#9aeaff" />
+                <stop offset="1" stop-color="#7d8df1" />
+              </linearGradient>
+            </defs>
+            <g class="orbit-lines" stroke="#7fc9ef" stroke-opacity=".19">
+              <ellipse cx="450" cy="450" rx="410" ry="210" />
+              <ellipse
+                cx="450"
+                cy="450"
+                rx="280"
+                ry="400"
+                transform="rotate(44 450 450)"
+              />
+              <ellipse
+                cx="450"
+                cy="450"
+                rx="280"
+                ry="400"
+                transform="rotate(-44 450 450)"
+              />
+            </g>
+            <g
+              class="cube-lines"
+              stroke="url(#cube-gradient)"
+              stroke-width="5"
+              stroke-linejoin="round"
+            >
+              <path
+                class="cube-face"
+                d="m450 205 220 125v250L450 705 230 580V330L450 205Z"
+                fill="#17293e"
+                fill-opacity=".86"
+              />
+              <path d="m230 330 220 125 220-125M450 455v250M340 268l220 125" />
+            </g>
+            <g
+              class="node-lines"
+              stroke="#7fc9ef"
+              stroke-width="2"
+              stroke-dasharray="4 10"
+            >
+              <path
+                d="M450 205V60M670 330l145-85M670 580l145 85M450 705v135M230 580 85 665M230 330 85 245"
+              />
+            </g>
+            <g fill="#a5e7fa" class="nodes">
+              <circle cx="450" cy="60" r="9" />
+              <circle cx="815" cy="245" r="9" />
+              <circle cx="815" cy="665" r="9" />
+              <circle cx="450" cy="840" r="9" />
+              <circle cx="85" cy="665" r="9" />
+              <circle cx="85" cy="245" r="9" />
+            </g>
+          </svg>
+          <div class="network-tag tag-one">DNS</div>
+          <div class="network-tag tag-two">PROXY</div>
+          <div class="network-tag tag-three">ROUTES</div>
+        </div>
+        <div class="intro-bottom reveal">
+          <span class="tiny-square"></span>LOCAL CONTROL. OPEN SOURCE.
+        </div>
+      </section>
+
+      <section id="engines" class="scene">
+        <div class="scene-copy">
+          <div class="eyebrow reveal">01 / ENGINE CONTROL</div>
+          <h2 class="reveal">
+            Two cores.<br /><span class="accent">One panel.</span>
+          </h2>
+          <p class="reveal">Native profiles.<br />One place to run them.</p>
+          <div class="engine-pills reveal">
+            <div><span class="pill-dot"></span>Mihomo <small>YAML</small></div>
+            <div>
+              <span class="pill-dot violet"></span>sing-box <small>JSON</small>
+            </div>
+          </div>
+          <div class="microcopy reveal">Start · Stop · Restart · Validate</div>
+        </div>
+        <div id="engine-screen" class="screen engine-screen">
+          <div class="screen-bar">
+            <span></span><span></span><span></span><b>ENGINE-AWARE PROFILES</b>
+          </div>
+          <div class="screen-body">
+            <img
+              src="assets/ui/profiles-mihomo.png"
+              alt="Real boxctl Mihomo profiles interface"
+            /><img
+              id="singbox-shot"
+              class="overlay-shot"
+              src="assets/ui/profiles-sing-box.png"
+              alt="Real boxctl sing-box profiles interface"
+            />
+          </div>
+        </div>
+        <div id="editor-inset" class="detail-card">
+          <div class="detail-caption">YOUR CONFIG. ITS NATIVE FORMAT.</div>
+          <div class="editor-crop">
+            <img
+              data-layout-allow-overflow
+              src="assets/ui/config-editor.png"
+              alt="Native Mihomo YAML profile editor"
+            /><img
+              id="json-editor-shot"
+              class="overlay-shot"
+              data-layout-allow-overflow
+              src="assets/ui/config-json.png"
+              alt="Native sing-box JSON profile editor"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section id="routing" class="scene">
+        <div class="scene-copy">
+          <div class="eyebrow reveal">02 / ROUTING</div>
+          <h2 class="reveal">
+            Route it.<br /><span class="accent">Your way.</span>
+          </h2>
+          <p class="reveal">Pick a proxy.<br />Make the rules.</p>
+          <div class="mode-grid reveal">
+            <span>TPROXY</span><span>Hybrid</span><span>TUN</span
+            ><span>Mixed</span><span>Mixed2</span>
+          </div>
+        </div>
+        <div id="proxy-screen" class="screen proxy-screen">
+          <div class="screen-bar">
+            <span></span><span></span><span></span
+            ><b>PROXIES & LATENCY TESTS</b>
+          </div>
+          <div class="screen-body">
+            <img
+              src="assets/ui/proxies.png"
+              alt="Actual boxctl proxy selectors and latency results"
+            /><img
+              id="rules-shot"
+              class="overlay-shot"
+              src="assets/ui/rules.png"
+              alt="Actual boxctl routing rules"
+            />
+          </div>
+        </div>
+        <div id="routing-inset" class="detail-card">
+          <div class="detail-caption">CAPTURE & DNS</div>
+          <div class="routing-crop">
+            <img
+              data-layout-allow-overflow
+              src="assets/ui/config-capture.png"
+              alt="Capture mode settings"
+            />
+          </div>
+        </div>
+        <div class="feature-rail reveal">
+          <span>Native & remote profiles</span><i></i
+          ><span>Mihomo subscriptions & providers</span><i></i
+          ><span>Local rule lists</span>
+        </div>
+      </section>
+
+      <section id="visibility" class="scene">
+        <div class="wide-heading">
+          <div class="eyebrow reveal">03 / LIVE VISIBILITY</div>
+          <h2 class="reveal">
+            See every <span class="accent">connection.</span>
+          </h2>
+        </div>
+        <div class="vertical-features">
+          <div class="reveal"><span>01</span>Traffic</div>
+          <div class="reveal"><span>02</span>LAN devices</div>
+          <div class="reveal"><span>03</span>CPU & memory</div>
+          <div class="reveal"><span>04</span>Live logs</div>
+        </div>
+        <div id="monitor-screen" class="screen monitor-screen">
+          <div class="screen-bar">
+            <span></span><span></span><span></span><b>LIVE NETWORK INSIGHT</b>
+          </div>
+          <div class="screen-body">
+            <img
+              id="status-overview-shot"
+              src="assets/ui/status.png"
+              data-start="12"
+              data-duration="4.5"
+              alt="Actual status and per-process resource metrics"
+            /><img
+              id="connections-shot"
+              class="overlay-shot"
+              src="assets/ui/connections.png"
+              alt="Actual connection table with LAN device names"
+            />
+          </div>
+        </div>
+        <div id="logs-inset" class="detail-card">
+          <div class="detail-caption">
+            <span class="live-dot"></span> THE DETAILS, WHEN YOU NEED THEM
+          </div>
+          <div class="logs-crop">
+            <img
+              data-layout-allow-overflow
+              src="assets/ui/logs.png"
+              alt="Actual live log viewer"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section id="confidence" class="scene confidence-scene">
+        <div class="scene-copy">
+          <div class="eyebrow reveal">04 / PEACE OF MIND</div>
+          <h2 class="reveal">
+            Update.<br />Protect.<br /><span class="accent">Recover.</span>
+          </h2>
+          <p class="reveal">Built for the network<br />you depend on.</p>
+        </div>
+        <div id="update-screen" class="screen update-screen">
+          <div class="screen-bar">
+            <span></span><span></span><span></span
+            ><b>VERIFIED UPDATES · AUTOMATIC ROLLBACK</b>
+          </div>
+          <div class="screen-body">
+            <img
+              src="assets/ui/updates.png"
+              alt="Verified core and boxctl updates interface"
+            /><img
+              id="backups-shot"
+              class="overlay-shot"
+              src="assets/ui/backups.png"
+              alt="Portable backup and restore interface"
+            />
+          </div>
+        </div>
+        <div id="protection-inset" class="detail-card">
+          <div class="detail-caption">OPTIONAL RESTART PROTECTION</div>
+          <div class="protection-crop">
+            <img
+              data-layout-allow-overflow
+              src="assets/ui/settings.png"
+              alt="Real restart protection and network recovery controls"
+            />
+          </div>
+        </div>
+        <div class="confidence-footer reveal">
+          Verified core & manager updates <span> / </span> Portable backups
+          <span> / </span> Network recovery
+        </div>
+      </section>
+
+      <section id="anywhere" class="scene">
+        <div class="scene-copy">
+          <div class="eyebrow reveal">05 / MADE FOR YOUR EVERYDAY</div>
+          <h2 class="reveal">
+            Full control.<br /><span class="accent">Any screen.</span>
+          </h2>
+          <p class="reveal">Desktop to mobile.<br />Dark to light.</p>
+          <div class="language-pills reveal">
+            <span>EN</span><span>RU</span><i></i><span>☾</span><span>☀</span>
+          </div>
+          <div class="microcopy reveal">
+            Password-protected access<br />Optional external Zashboard
+          </div>
+        </div>
+        <div id="desktop-screen" class="screen desktop-screen">
+          <div class="screen-bar">
+            <span></span><span></span><span></span
+            ><b>YOUR LOCAL CONTROL PANEL</b>
+          </div>
+          <div class="screen-body">
+            <img
+              id="desktop-overview-shot"
+              src="assets/ui/status.png"
+              data-start="22.5"
+              data-duration="4.5"
+              alt="Boxctl desktop dark mode"
+            />
+          </div>
+        </div>
+        <div id="phone" class="phone">
+          <div class="phone-speaker"></div>
+          <img
+            src="assets/ui/mobile-light.png"
+            alt="Actual mobile interface in light mode"
+          />
+          <div class="phone-home"></div>
+        </div>
+      </section>
+
+      <section id="outro" class="scene">
+        <div class="outro-orbit"></div>
+        <div class="outro-orbit second"></div>
+        <div class="outro-lockup">
+          <svg class="outro-cube" viewBox="0 0 48 48" fill="none">
+            <path
+              d="m24 4 18 10v20L24 44 6 34V14L24 4Z M6 14l18 10 18-10 M24 24v20 M15 9l18 10"
+            /></svg
+          ><span>boxctl</span>
+        </div>
+        <h2 class="outro-title">
+          Own your <span class="accent">OpenWrt network.</span>
+        </h2>
+        <div class="outro-link">
+          <svg
+            viewBox="0 0 24 24"
+            width="30"
+            height="30"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+          >
+            <path
+              d="M9 19c-5 1-5-2-7-2m14 5v-4a3.5 3.5 0 0 0-1-2.7c3.3-.4 6.7-1.6 6.7-7.3a5.7 5.7 0 0 0-1.5-4A5.3 5.3 0 0 0 20 0s-1.3-.4-4.2 1.5a14.4 14.4 0 0 0-7.6 0C5.3-.4 4 0 4 0a5.3 5.3 0 0 0-.2 4A5.7 5.7 0 0 0 2.3 8c0 5.7 3.4 6.9 6.7 7.3A3.5 3.5 0 0 0 8 18v4"
+              transform="translate(1 1) scale(.88)"
+            /></svg
+          >github.com/kontsevoye/boxctl<span class="link-arrow">↗</span>
+        </div>
+        <div class="outro-footer">
+          OPEN SOURCE <span>·</span> MIHOMO + SING-BOX <span>·</span> BUILT FOR
+          OPENWRT
+        </div>
+      </section>
+      <div class="transition-slice"></div>
+      <footer class="film-footer">
+        <span id="footer-label">PRODUCT TOUR</span
+        ><span class="demo-disclosure">Actual boxctl UI · Demo data</span
+        ><span>30 SECONDS / TOTAL CONTROL</span>
+      </footer>
+      <div class="progress"><div id="progress-fill"></div></div>
+      <audio
+        id="soundtrack"
+        src="assets/audio/boxctl-promo.wav"
+        data-start="0"
+        data-duration="30"
+        data-track-index="10"
+        data-volume="1"
+      ></audio>
+    </main>
+    <script src="assets/vendor/gsap.min.js"></script>
+    <script src="film.js"></script>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines.boxctl = tl;
+    </script>
+  </body>
+</html>

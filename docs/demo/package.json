@@ -1,0 +1,27 @@
+{
+  "name": "boxctl-product-film",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "setup:browser": "node scripts/browser.mjs",
+    "capture": "node scripts/capture.mjs",
+    "prepare:assets": "node scripts/prepare.mjs && python3 scripts/audio.py",
+    "preview": "node scripts/hyperframes.mjs preview --port 3848",
+    "lint": "node scripts/hyperframes.mjs lint",
+    "check": "node scripts/hyperframes.mjs check",
+    "render": "node scripts/hyperframes.mjs render --fps 60 --quality high --crf 24 --workers 2 --output output/boxctl-demo.mp4",
+    "deliver": "node scripts/deliver.mjs",
+    "upload": "node scripts/upload.mjs",
+    "build": "npm run capture && npm run prepare:assets && npm run lint && npm run check -- --samples 30 && npm run render && npm run deliver"
+  },
+  "devDependencies": {
+    "@fontsource/space-grotesk": "5.3.0",
+    "gsap": "3.15.0",
+    "hyperframes": "0.8.31",
+    "puppeteer": "25.10.0"
+  }
+}

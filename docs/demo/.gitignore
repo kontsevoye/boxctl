@@ -1,0 +1,10 @@
+node_modules/
+.cache/
+output/
+assets/vendor/
+assets/audio/*.wav
+assets/ui/
+hyperframes.diagnostics.json
+.hyperframes/
+/poster.jpg
+/contact-sheet.jpg

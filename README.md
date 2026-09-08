@@ -13,6 +13,22 @@ OpenWrt dataplane.
 
 *Status overview in dark mode, shown with demo data.*
 
+<details>
+<summary><strong>▶ Watch boxctl in action — 30-second product tour</strong></summary>
+
+<!-- boxctl-demo:player:start -->
+
+https://github.com/user-attachments/assets/16067fd2-7005-46ac-bfd4-5599731d8737
+
+<!-- boxctl-demo:player:end -->
+
+**[Watch / download the full video with sound (1080p, 60 fps)](docs/demo/boxctl-demo.mp4)**
+
+Actual boxctl interface with demo data. English · 30 seconds.
+[Video source and regeneration instructions](docs/demo/README.md).
+
+</details>
+
 ## Features
 
 - built-in English and Russian web interface with password authentication;
