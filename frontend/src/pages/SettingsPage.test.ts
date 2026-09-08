@@ -91,7 +91,10 @@ describe('settings update payload', () => {
       bypassTCPPorts: '6883, 6881-6882, 6882',
       bypassUDPPorts: '', proxyOnlyTCPPorts: '', proxyOnlyUDPPorts: '',
     }
-    expect(settingsUpdatePayload(settings, lists).bypassTCPPorts).toEqual([6881, 6882, 6883])
+    const payload = settingsUpdatePayload(settings, lists)
+    expect(payload.bypassTCPPorts).toEqual([6881, 6882, 6883])
+    // Theme is now a browser preference controlled from the sidebar.
+    expect(payload).not.toHaveProperty('theme')
   })
 
   it('rejects malformed, out-of-range and inverted port entries', () => {

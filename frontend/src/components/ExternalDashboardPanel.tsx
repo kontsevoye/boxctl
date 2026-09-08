@@ -50,23 +50,22 @@ export function ExternalDashboardPanel({ settings }: { settings?: Settings }) {
   const pending = busy !== '' || launch.busy
 
   return <section className="du-card panel settings-section external-dashboard-settings" aria-labelledby="external-dashboard-title">
-    <div className="title-row">
-      <div><h2 id="external-dashboard-title">{t('externalDashboard')}</h2><small>{t('externalDashboardHint')}</small></div>
+    <div className="settings-section-heading"><h2 id="external-dashboard-title">{t('externalDashboard')}</h2><p>{t('externalDashboardHint')}</p></div>
+    <div className="external-dashboard-overview">
       <label className="toggle-row">
         <input className="du-toggle du-toggle-sm" type="checkbox" checked={enabled} disabled={!settings || pending} onChange={(event) => void toggle(event.currentTarget.checked)} />
         <span className="toggle-copy"><span>{t('enableExternalDashboard')}</span><small>{t('externalDashboardToggleHint')}</small></span>
       </label>
-    </div>
-    {status && <div className="title-row">
-      <div>
+      {status && <div className="external-dashboard-version">
         <small className="dashboard-version">{status.installed ? `${t('externalDashboardVersion')}: ${status.currentVersion ?? '—'}` : t('externalDashboardNotInstalled')}</small>
         {status.latestVersion && <small className="dashboard-version">{t('latestVersion')}: {status.latestVersion}</small>}
         {status.updateCheckFailed && <small className="field-error" role="status">{t('externalDashboardUpdateCheckFailed')}</small>}
         {status.installed && status.latestVersion && !status.updateCheckFailed && <span className={`du-badge du-badge-sm ${status.updateAvailable ? 'du-badge-warning' : 'du-badge-success'}`}>
           {t(status.updateAvailable ? 'externalDashboardUpdateAvailable' : 'externalDashboardAlreadyCurrent')}
         </span>}
-      </div>
-      <div className="dashboard-actions">
+      </div>}
+    </div>
+    {status && <div className="settings-card-actions">
         <button className="du-btn du-btn-ghost du-btn-sm" type="button" disabled={pending} onClick={() => void check()}>{t(busy === 'check' ? 'checkingDashboardUpdates' : 'checkDashboardUpdates')}</button>
         <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={pending || (status.installed && status.latestVersion !== undefined && !status.updateAvailable && !status.updateCheckFailed)} onClick={() => void manage()}>
           {t(busy === 'install' ? (status.installed ? 'externalDashboardUpdating' : 'externalDashboardInstalling') : (status.installed ? 'externalDashboardUpdate' : 'externalDashboardInstall'))}
@@ -74,7 +73,6 @@ export function ExternalDashboardPanel({ settings }: { settings?: Settings }) {
         {status.installed && <button className="du-btn du-btn-primary du-btn-sm" type="button" disabled={pending || !enabled} onClick={launch.launch}>
           {t(launch.busy ? 'externalDashboardOpening' : 'externalDashboardOpen')}
         </button>}
-      </div>
     </div>}
     {query.loading && !status && <Loading />}
     {query.error && <ErrorPanel error={query.error} onRetry={query.reload} />}

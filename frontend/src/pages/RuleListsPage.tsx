@@ -149,7 +149,7 @@ export function RuleListsPage() {
       if (list) void open(list)
     }}>{t('reloadLatest')}</button></div>}
     <div className="rule-lists-stack">
-      <section className="du-card panel rule-list-accordion">
+      <section className="rule-list-accordion">
         {query.loading && !query.data && <Loading />}
         {query.error && <ErrorPanel error={query.error} onRetry={query.reload} />}
         {lists && lists.length === 0 && !creating && <Empty />}
@@ -267,17 +267,16 @@ function FakeIPWhitelistPanel({ editable, engine }: { editable: boolean; engine?
     ? document.generatedCIDRs.join('\n')
     : t('fakeIPGeneratedEmpty')
   return <form className="du-card panel fake-ip-panel" onSubmit={saveManual}>
-    <div className="title-row">
-      <h2>{t('fakeIPCaptureDestinations')}</h2>
+    <div className="fake-ip-heading">
+      <div><h2>{t('fakeIPCaptureDestinations')}</h2><p>{t('fakeIPCaptureDescription')}</p></div>
       <div className="fake-ip-badges">
         {document.selective && <Badge tone="good">{t('fakeIPSelectiveActive')}</Badge>}
         {document.applied && <Badge tone="good">{t('fakeIPAppliedBadge')}</Badge>}
         {document.restartRequired && <Badge tone="warning">{t('restartRequired')}</Badge>}
         {!document.applied && !document.restartRequired && <Badge tone="warning">{t('fakeIPNotAppliedBadge')}</Badge>}
-        <Badge>{document.effectiveCount}</Badge>
+
       </div>
     </div>
-    <p>{t('fakeIPCaptureDescription')}</p>
     {!document.selective && <div className="du-alert du-alert-warning" role="status">{t('fakeIPWideCaptureWarning')}</div>}
     {document.selective && !document.applicable && <div className="du-alert du-alert-info" role="status">{t('fakeIPNotApplicable')}</div>}
     {resultKey && <div className={document.applied ? 'du-alert du-alert-success' : 'du-alert du-alert-info'} role="status">{t(resultKey)}</div>}
@@ -291,26 +290,26 @@ function FakeIPWhitelistPanel({ editable, engine }: { editable: boolean; engine?
       <div><dt>{t('fakeIPGeneratedCount')}</dt><dd>{document.generatedCount}</dd></div>
       <div><dt>{t('fakeIPEffectiveCount')}</dt><dd>{document.effectiveCount}</dd></div>
     </dl>
-    <div>
+    <div className="fake-ip-range-row">
       <small>{t('fakeIPRanges')}</small>
       <div className="fake-ip-ranges">
         {document.fakeIPRanges.length > 0 ? document.fakeIPRanges.map((range) => <code key={range}>{range}</code>) : <span className="muted">—</span>}
       </div>
     </div>
     <div className="fake-ip-editors">
-      <label>{t('fakeIPManualDestinations')}
+      <label><span className="fake-ip-editor-heading">{t('fakeIPManualDestinations')}<span>{document.manualCount}</span></span>
         <textarea className="du-textarea fake-ip-editor" spellCheck={false} value={manualContent} onInput={(event) => setManualContent(event.currentTarget.value)} />
         <small>{t('fakeIPManualHint')}</small>
       </label>
-      <label>{t('fakeIPGeneratedDestinations')}
+      <label><span className="fake-ip-editor-heading">{t('fakeIPGeneratedDestinations')}<span>{document.generatedCount}</span></span>
         <textarea className="du-textarea fake-ip-editor" spellCheck={false} readOnly value={generatedContent} />
       </label>
     </div>
-    <div className="fake-ip-meta">
+    <details className="fake-ip-details"><summary>{t('details')}</summary><div className="fake-ip-meta">
       <span>{t('revision')}: <code>{document.revision}</code></span>
       <span>{t('fakeIPLastGenerated')}: {formatDate(document.generatedAt, locale)}</span>
-      {manualContent !== document.manualContent && <span>{t('fakeIPUnsavedChanges')}</span>}
-    </div>
+    </div></details>
+    {manualContent !== document.manualContent && <small role="status">{t('fakeIPUnsavedChanges')}</small>}
     <div className="form-actions">
       <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={!editable || !document.applicable || manualContent !== document.manualContent || busy !== ''} onClick={regenerate}>{busy === 'regenerate' ? t('fakeIPRegenerating') : t('fakeIPRegenerate')}</button>
       <button className="du-btn du-btn-primary du-btn-sm" disabled={!editable || busy !== ''}>{busy === 'save' ? t('saving') : t('save')}</button>

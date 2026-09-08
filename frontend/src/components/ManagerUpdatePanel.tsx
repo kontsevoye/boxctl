@@ -1,3 +1,4 @@
+import { ArrowUpCircle, CheckCircle2, RefreshCw, RotateCcw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { APIError, request } from '../api'
 import { useQuery } from '../hooks'
@@ -57,32 +58,36 @@ export function ManagerUpdatePanel() {
     }
   }
 
-  return <section id="boxctl-update" className="settings-section" aria-labelledby="boxctl-update-title">
-      <div className="title-row">
-        <div><h2 id="boxctl-update-title">{t('boxctlUpdates')}</h2><small>{t('boxctlUpdateHint')}</small></div>
-      </div>
-      {view && <div className="title-row">
-        <div>
-          <small className="dashboard-version">{t('boxctlCurrentVersion')}: {formatBoxctlVersion(view.currentVersion)}</small>
-          <small className="dashboard-version">{t('latestVersion')}: {formatBoxctlVersion(view.latestVersion)}</small>
-          {view.checkedAt && <small className="dashboard-version">{t('boxctlLastChecked')}: {new Date(view.checkedAt).toLocaleString()}</small>}
-          {view.checkFailed ? <small className="field-error" role="status">{t('boxctlCheckFailed')}</small> : view.latestVersion && <span className={`du-badge du-badge-sm ${view.updateAvailable ? 'du-badge-warning' : 'du-badge-success'}`}>{t(view.updateAvailable ? 'boxctlUpdateAvailable' : 'boxctlAlreadyCurrent')}</span>}
+  return <section id="boxctl-update" className="du-card panel settings-section manager-update-panel" aria-labelledby="boxctl-update-title">
+      <div className="settings-section-heading"><h2 id="boxctl-update-title">{t('boxctlUpdates')}</h2><p>{t('boxctlUpdateHint')}</p></div>
+      {view && <>
+        <div className="update-overview">
+          <dl className="update-versions">
+            <div><dt>{t('boxctlCurrentVersion')}</dt><dd>{formatBoxctlVersion(view.currentVersion)}</dd></div>
+            <div><dt>{t('latestVersion')}</dt><dd>{formatBoxctlVersion(view.latestVersion)}</dd></div>
+          </dl>
+          <div className="update-status">
+            {view.checkFailed ? <span className="field-error" role="status">{t('boxctlCheckFailed')}</span> : view.latestVersion && <span className={`update-status-label${view.updateAvailable ? ' available' : ''}`} role="status">
+              {view.updateAvailable ? <ArrowUpCircle size={16} aria-hidden="true" /> : <CheckCircle2 size={16} aria-hidden="true" />}{t(view.updateAvailable ? 'boxctlUpdateAvailable' : 'boxctlAlreadyCurrent')}
+            </span>}
+            {view.checkedAt && <small>{t('boxctlLastChecked')}: {new Date(view.checkedAt).toLocaleString()}</small>}
+          </div>
         </div>
-        <div className="dashboard-actions">
-          <button type="button" className="du-btn du-btn-ghost du-btn-sm" disabled={pending} onClick={() => void check()}>{t(busy === 'check' ? 'boxctlChecking' : 'boxctlCheck')}</button>
-          <button type="button" className="du-btn du-btn-primary du-btn-sm" disabled={pending || !view.updateAvailable || job?.state === 'confirmation-required'} onClick={() => void install()}>{t(pending && busy !== 'check' ? 'boxctlUpdating' : 'boxctlInstallUpdate')}</button>
-          <a className="du-btn du-btn-outline du-btn-sm" href={boxctlUpdateURL(view.releaseUrl)} target="_blank" rel="noreferrer">{t('boxctlReleaseNotes')}</a>
+        <div className="settings-card-actions">
+          <button type="button" className="du-btn du-btn-outline du-btn-sm" disabled={pending} onClick={() => void check()}><RefreshCw size={15} aria-hidden="true" />{t(busy === 'check' ? 'boxctlChecking' : 'boxctlCheck')}</button>
+          <a className="du-btn du-btn-ghost du-btn-sm" href={boxctlUpdateURL(view.releaseUrl)} target="_blank" rel="noreferrer">{t('boxctlReleaseNotes')}</a>
+          {view.updateAvailable && <button type="button" className="du-btn du-btn-primary du-btn-sm" disabled={pending || job?.state === 'confirmation-required'} onClick={() => void install()}>{t(pending && busy !== 'check' ? 'boxctlUpdating' : 'boxctlInstallUpdate')}</button>}
         </div>
-      </div>}
+      </>}
       {!view && query.loading && <Loading />}
       {(active || uncertain) && <div className="du-alert" role="status">{t(query.error || uncertain ? 'boxctlReconnecting' : 'boxctlUpdatingHint')}</div>}
       {job?.state === 'confirmation-required' && <div className="du-alert du-alert-warning">
         <span>{t('boxctlFullRestartRequired')}</span>
         <button type="button" className="du-btn du-btn-warning du-btn-sm" disabled={pending} onClick={() => void install(true)}>{t('boxctlFullRestartUpdate')}</button>
       </div>}
-      {job?.state === 'succeeded' && <div className="du-alert du-alert-success" role="status">
-        <span>{t('boxctlUpdated')}: {formatBoxctlVersion(job.currentVersion)}</span>
-        <button type="button" className="du-btn du-btn-ghost du-btn-sm" onClick={() => window.location.reload()}>{t('boxctlReloadUI')}</button>
+      {job?.state === 'succeeded' && <div className="update-complete" role="status">
+        <CheckCircle2 size={18} aria-hidden="true" /><span>{t('boxctlUpdated')}: {formatBoxctlVersion(job.currentVersion)}</span>
+        <button type="button" className="du-btn du-btn-outline du-btn-sm" onClick={() => window.location.reload()}><RotateCcw size={15} aria-hidden="true" />{t('boxctlReloadUI')}</button>
       </div>}
       {job?.state === 'failed' && <div className="du-alert du-alert-error" role="alert">{t(job.errorCode === 'worker_interrupted' ? 'boxctlUpdateInterrupted' : 'boxctlUpdateFailed')}</div>}
       {query.error && !active && !uncertain && <ErrorPanel error={query.error} onRetry={query.reload} />}

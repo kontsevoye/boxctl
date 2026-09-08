@@ -9,9 +9,21 @@ import {
   mergeConnectionSnapshots,
   nextConnectionSort,
   parseConnectionsEvent,
+  selectConnectionRows,
 } from './ConnectionsPage'
 
 describe('Connections stream payload', () => {
+  it('combines active connections and closed history without requiring a close timestamp', () => {
+    const snapshot = { ...emptySnapshot(), active: [{ id: 'live' }], closed: [{ id: 'history' }] }
+    expect(selectConnectionRows(snapshot, 'all')).toEqual([
+      { connection: { id: 'live' }, closed: false },
+      { connection: { id: 'history' }, closed: true },
+    ])
+    expect(selectConnectionRows(snapshot, 'active').map((row) => row.connection.id)).toEqual(['live'])
+    expect(selectConnectionRows(snapshot, 'closed').map((row) => row.connection.id)).toEqual(['history'])
+    expect(selectConnectionRows({ ...emptySnapshot(), closed: undefined }, 'all')).toEqual([])
+  })
+
   it('groups source devices by IP across ports and enriches an earlier unnamed device', () => {
     expect(connectionDevices([
       { id: 'one', sourceIP: '192.168.69.42', sourcePort: '1000' },

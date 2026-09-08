@@ -2,7 +2,7 @@
   display: flex;
   gap: .35rem;
   overflow: visible;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: .85rem;
   background: color-mix(in srgb, var(--panel-raised) 82%, var(--bg));
   padding: .3rem;
@@ -17,17 +17,17 @@
   padding-inline: 1rem;
   color: var(--muted);
   font-weight: 760;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 58%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-color) 58%, transparent);
 }
 
 .configuration-tabs .du-tab:hover {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-color));
   background: var(--panel-raised);
   color: var(--text);
 }
 
 .configuration-tabs .du-tab-active {
-  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border-color));
   background: var(--accent-soft);
   color: var(--accent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent), 0 5px 16px rgb(0 0 0 / 14%);

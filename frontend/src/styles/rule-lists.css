@@ -1,13 +1,15 @@
 .rule-list-accordion {
   display: grid;
   gap: .7rem;
-  padding: .7rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  align-items: start;
+  padding: 0;
 }
 
 .rule-list-item {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: .85rem;
   background: color-mix(in srgb, var(--panel-raised) 48%, var(--panel));
   transition: border-color .15s, background .15s, box-shadow .15s;
@@ -15,10 +17,11 @@
 
 .rule-list-item:hover,
 .rule-list-item.expanded {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-color));
 }
 
 .rule-list-item.expanded {
+  grid-column: 1 / -1;
   background: color-mix(in srgb, var(--panel-raised) 72%, var(--panel));
   box-shadow: 0 12px 28px rgb(0 0 0 / 14%);
 }
@@ -98,7 +101,7 @@ button.rule-list-toggle {
   justify-content: center;
   width: 2.55rem;
   height: 2.55rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: .65rem;
   background: var(--panel-raised);
   color: var(--muted);
@@ -107,7 +110,7 @@ button.rule-list-toggle {
 }
 
 .rule-list-config-action:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-color));
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -120,7 +123,7 @@ button.rule-list-toggle {
 .rule-list-editor {
   display: grid;
   gap: .9rem;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-color);
   padding: 1rem;
 }
 
@@ -133,16 +136,17 @@ button.rule-list-toggle {
 .rule-prefix-toolbar .du-btn {
   height: auto;
   min-height: 2rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   background: var(--panel-raised);
   padding: .35rem .55rem;
   font-size: .72rem;
 }
 
 .rule-content-editor {
-  min-height: 28rem;
+  min-height: 16rem;
   resize: vertical;
-  background: #080d16;
+  background: var(--panel-raised);
+  color: var(--text);
   font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   tab-size: 2;
 }

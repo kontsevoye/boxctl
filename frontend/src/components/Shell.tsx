@@ -13,6 +13,7 @@ import { Brand } from './Brand'
 import { BoxctlVersion, BoxctlVersionProvider } from './BoxctlVersion'
 import { AmbientBackdrop } from './effects'
 import { Toast } from './Toast'
+import { ThemeToggle } from './ThemeToggle'
 
 interface NavItem {
   route: Route
@@ -186,6 +187,7 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
               <button className={locale === 'ru' ? 'active' : ''} type="button" role="tab" aria-selected={locale === 'ru'} onClick={() => setLocale('ru')}>RU</button>
               <button className={locale === 'en' ? 'active' : ''} type="button" role="tab" aria-selected={locale === 'en'} onClick={() => setLocale('en')}>EN</button>
             </div>
+            <ThemeToggle />
             <button className="sidebar-sign-out" type="button" onClick={signOut}><LogOut size={15} strokeWidth={1.9} aria-hidden="true" /><span>{t('logout')}</span></button>
           </div>
         </footer>

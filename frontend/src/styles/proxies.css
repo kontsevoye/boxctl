@@ -1,6 +1,6 @@
 .proxies-workspace {
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: 1rem;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   box-shadow: 0 14px 35px rgb(0 0 0 / 12%);
@@ -11,7 +11,7 @@
   align-items: baseline;
   flex-wrap: wrap;
   gap: .65rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-color);
   padding: 1rem 1.15rem .85rem;
 }
 
@@ -42,7 +42,7 @@
   align-items: center;
   gap: .6rem;
   min-height: 4.25rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-color);
   padding: .75rem 1rem;
 }
 
@@ -50,7 +50,7 @@
   display: flex;
   flex: 0 0 auto;
   gap: .2rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: .7rem;
   background: var(--bg);
   padding: .2rem;
@@ -61,7 +61,7 @@
   align-items: center;
   gap: .45rem;
   min-height: 2.35rem;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: .52rem;
   background: transparent;
   padding: .45rem .75rem;
@@ -146,7 +146,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   background: var(--panel-raised);
   color: var(--muted);
   cursor: pointer;
@@ -157,7 +157,7 @@
 .proxy-card-action:hover:not(:disabled),
 .proxy-node-test:hover:not(:disabled),
 .proxy-provider-update:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border-color));
   color: var(--accent);
 }
 
@@ -200,14 +200,14 @@
 .proxy-group-card {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: .9rem;
   background: color-mix(in srgb, var(--panel-raised) 72%, var(--panel));
   transition: border-color .15s, box-shadow .15s;
 }
 
 .proxy-group-card.expanded {
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border-color));
   box-shadow: 0 12px 32px rgb(0 0 0 / 16%);
 }
 
@@ -241,7 +241,7 @@
   display: grid;
   place-items: center;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: .55rem;
   background: var(--bg);
   color: var(--muted);
@@ -360,7 +360,7 @@
   align-items: center;
   gap: .3rem;
   min-height: 1.35rem;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
   padding: .65rem 1rem .75rem;
 }
 
@@ -381,14 +381,14 @@
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: .45rem;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-color);
   padding: .8rem;
 }
 
 .proxy-node {
   position: relative;
   min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
   border-radius: .58rem;
   background: color-mix(in srgb, var(--bg) 86%, transparent);
   overflow: hidden;
@@ -396,11 +396,11 @@
 }
 
 .proxy-node:hover {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border-color));
 }
 
 .proxy-node.selected {
-  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border-color));
   background: color-mix(in srgb, var(--accent-soft) 90%, var(--panel));
 }
 
@@ -509,7 +509,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: .85rem;
   background: color-mix(in srgb, var(--panel-raised) 72%, var(--panel));
   padding: .9rem;
@@ -596,7 +596,7 @@
   min-width: 7rem;
   display: grid;
   gap: .2rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: .7rem;
   background: var(--panel);
   padding: .65rem .8rem;

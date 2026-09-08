@@ -11,7 +11,6 @@ import { ExternalDashboardPanel } from '../components/ExternalDashboardPanel'
 import { useFallbackQuery, useQuery } from '../hooks'
 import { useI18n } from '../i18n'
 import { legacyEngine, selectedEngine } from '../engines'
-import { applyTheme } from '../theme'
 import type { Capabilities, CoreUpdateResult, CoreUpdateStatus, EngineInfo, Settings } from '../types'
 import { BackupsPage } from './BackupsPage'
 
@@ -84,7 +83,6 @@ export function SettingsPage() {
       setListText(settingsListText(updated))
       setPortErrors({})
       if (updated.language === 'ru' || updated.language === 'en') setLocale(updated.language)
-      applyTheme(updated.theme)
       setMessage(t('saved'))
     } catch (reason) {
       setError(reason instanceof APIError ? reason : new APIError(0, 'network_error', String(reason)))
@@ -112,18 +110,13 @@ export function SettingsPage() {
     {query.error && <ErrorPanel error={query.error} onRetry={query.reload} />}
     {error && <Toast tone="error" onDismiss={() => setError(undefined)}><strong>{t('requestFailed')}</strong><span>{error.message}</span></Toast>}
     {!error && message && <Toast tone="success" onDismiss={() => setMessage('')}>{message}</Toast>}
-		{canPerform(capabilities, 'cleanupFirewall') && <div className="du-card panel settings-section">
-			<div className="title-row">
-				<div><h2>{t('firewallRecovery')}</h2><small>{t('firewallRecoveryHint')}</small></div>
-				<button className="du-btn du-btn-warning du-btn-sm" type="button" disabled={firewallBusy || busy} onClick={() => void cleanupFirewall()}>{firewallBusy ? t('firewallCleaning') : t('cleanupFirewall')}</button>
-			</div>
-		</div>}
-    {externalDashboardAvailable && <ExternalDashboardPanel settings={query.data} />}
-    {form && <form className="du-card panel settings-form" onSubmit={save}>
+    <div className="settings-stack">
+    {form && <form className="settings-form" onSubmit={save}>
       {Object.keys(portErrors).length > 0 && <div className="du-alert du-alert-error" role="alert">{t('invalidPortLists')}</div>}
+      <section className="du-card panel settings-section">
+      <h2>{t('generalSettings')}</h2>
       <div className="form-grid">
         <ChoiceField label={t('language')} value={form.language} options={[{ value: 'en', label: t('englishLanguage') }, { value: 'ru', label: t('russianLanguage') }]} onChange={(value) => update('language', value)} />
-        <ChoiceField label={t('theme')} value={form.theme} options={[{ value: 'system', label: t('themeSystem') }, { value: 'dark', label: t('themeDark') }, { value: 'light', label: t('themeLight') }]} onChange={(value) => update('theme', value)} />
         <ChoiceField label={t('logLevel')} value={form.logLevel} options={['debug', 'info', 'warn', 'error'].map((value) => ({ value, label: value }))} onChange={(value) => update('logLevel', value)} />
         <ChoiceField label={t('updateChannel')} value={form.updateChannel} options={['stable', 'alpha'].map((value) => ({ value, label: value }))} onChange={(value) => update('updateChannel', value)} />
 				<ChoiceField label={t('operatingMode')} value={form.operatingMode ?? 'gateway'} options={[{ value: 'gateway', label: t('gatewayMode') }, { value: 'server', label: t('serverMode') }]} onChange={(value) => update('operatingMode', value as Settings['operatingMode'])} hint={form.operatingMode === 'server' ? t('serverModeHint') : t('gatewayModeHint')} />
@@ -132,12 +125,8 @@ export function SettingsPage() {
       <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.startOnBoot} onChange={(event) => update('startOnBoot', event.currentTarget.checked)} /><span>{t('startOnBoot')}</span></label>
       <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.coreRestartGuard ?? false} disabled={!form.coreRestartGuardSupported && !form.coreRestartGuard} onChange={(event) => update('coreRestartGuard', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('coreRestartGuard')}</span><small>{t('coreRestartGuardHint')}</small>{!form.coreRestartGuardSupported && <small>{t('coreRestartGuardUnavailable')}</small>}</span></label>
 		<label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoUpdate ?? false} onChange={(event) => update('autoUpdate', event.currentTarget.checked)} /><span>{t('autoUpdate')}</span></label>
-      <ManagerUpdatePanel />
-		<div className="settings-section">
-			<h2>{t('engineUpdates')}</h2>
-        {engines.filter((engine) => engine.management.updates).map((engine) => <EngineUpdatePanel key={engine.id} engine={engine} capabilities={capabilities} refreshCapabilities={refreshCapabilities} onMessage={setMessage} onError={setError} />)}
-		</div>
-      <div className="settings-section">
+      </section>
+      <div className="du-card panel settings-section">
 			<div className="title-row"><div><h2>{t('advancedRouting')}</h2><small>{t('interfaceCatalogHint')}</small></div><button className="du-btn du-btn-ghost du-btn-sm" type="button" onClick={query.reload}>{t('rescan')}</button></div>
 			{form.interfaces && form.interfaces.length > 0 && <div className="interface-catalog">
 				{form.interfaces.map((item) => <button className={`interface-chip ${item.role}`} type="button" key={item.name} onClick={() => addInterface(item.name)} title={t('addInterface')}><span>{item.name}</span><small>{item.role}</small></button>)}
@@ -173,7 +162,7 @@ export function SettingsPage() {
 		  </>}
 		</div>
 	  </div>
-	  {activeEngine?.id !== 'sing-box' && <div className="settings-section">
+	  {activeEngine?.id !== 'sing-box' && <div className="du-card panel settings-section">
 		<h2>{t('periodicMaintenance')}</h2>
 		<div className="toggle-grid">
 		  <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoRefreshProxyIPs ?? true} onChange={(event) => update('autoRefreshProxyIPs', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoRefreshProxyIPs')}</span><small>{t('autoRefreshProxyIPsHint')}</small></span></label>
@@ -183,12 +172,23 @@ export function SettingsPage() {
 		  <label>{t('maintenanceInterval')}<input className="du-input du-input-sm" type="number" min={5} max={1440} value={form.maintenanceIntervalMinutes ?? 30} onInput={(event) => update('maintenanceIntervalMinutes', event.currentTarget.valueAsNumber)} /><small>{t('maintenanceIntervalHint')}</small></label>
 		</div>
 	  </div>}
-		<div className="settings-section">
+		<div className="du-card panel settings-section">
 			<div className="title-row"><div><h2>{t('integratedDashboard')}</h2><small>{t('integratedDashboardHint')}</small></div><a className="du-btn du-btn-outline du-btn-sm" href="/proxies">{t('openDashboard')}</a></div>
 		</div>
       <div className="form-actions"><button className="du-btn du-btn-primary du-btn-sm" disabled={busy}>{busy ? t('saving') : t('save')}</button></div>
     </form>}
+      <ManagerUpdatePanel />
+		<div className="du-card panel settings-section">
+			<h2>{t('engineUpdates')}</h2>
+        {engines.filter((engine) => engine.management.updates).map((engine) => <EngineUpdatePanel key={engine.id} engine={engine} capabilities={capabilities} refreshCapabilities={refreshCapabilities} onMessage={setMessage} onError={setError} />)}
+		</div>
+    {externalDashboardAvailable && <ExternalDashboardPanel settings={query.data} />}
+    {canPerform(capabilities, 'cleanupFirewall') && <section className="du-card panel settings-section settings-recovery">
+      <div className="settings-section-heading"><h2>{t('firewallRecovery')}</h2><p>{t('firewallRecoveryHint')}</p></div>
+      <div className="settings-card-actions"><button className="du-btn du-btn-warning du-btn-soft du-btn-sm" type="button" disabled={firewallBusy || busy} onClick={() => void cleanupFirewall()}>{firewallBusy ? t('firewallCleaning') : t('cleanupFirewall')}</button></div>
+    </section>}
     {canShowPage(capabilities, 'backups') && <section className="settings-backups"><BackupsPage /></section>}
+    </div>
     <footer className="settings-product-footer"><BoxctlVersion className="settings-product-version" /></footer>
   </>
 }
@@ -243,7 +243,6 @@ export function externalDashboardSupported(capabilities: Capabilities, engine?: 
 export function settingsUpdatePayload(form: Settings, listText: Record<ListField, string>) {
   return {
     language: form.language,
-    theme: form.theme,
     logLevel: form.logLevel,
     updateChannel: form.updateChannel,
     captureMode: form.captureMode,

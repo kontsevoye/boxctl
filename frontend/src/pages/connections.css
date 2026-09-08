@@ -24,7 +24,7 @@
 .connections-summary > div {
   display: grid;
   gap: .22rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: .75rem;
   background: var(--panel);
   padding: .72rem .85rem;
@@ -53,7 +53,7 @@
 .connections-toolbar .connections-device-filter { flex-basis: 17rem; }
 
 .connections-mobile-sort,
-.connections-mobile-sort-direction {
+.connections-toolbar .connections-mobile-sort-direction {
   display: none;
 }
 
@@ -190,7 +190,7 @@
   width: 2rem;
   height: 2rem;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--border-color));
   border-radius: .6rem;
   background: transparent;
   color: var(--danger);
@@ -222,21 +222,21 @@
   .connections-toolbar > select { flex: 1 1 calc(50% - .3rem); }
   .connections-mobile-sort { display: block; flex: 1 1 calc(50% - 3.15rem); }
   .connections-mobile-sort select { width: 100%; }
-  .connections-mobile-sort-direction { display: inline-grid; flex: 0 0 2.8rem; }
+  .connections-toolbar .connections-mobile-sort-direction { display: inline-grid; flex: 0 0 2.8rem; }
   .connections-table-wrap { overflow: visible; border: 0; background: transparent; }
   .connections-table { min-width: 0; border-collapse: separate; border-spacing: 0; }
   .connections-table thead { display: none; }
-  .connections-table tbody { display: block; overflow: hidden; margin-bottom: .75rem; border: 1px solid var(--border); border-radius: .8rem; background: var(--surface-glass); }
+  .connections-table tbody { display: block; overflow: hidden; margin-bottom: .75rem; border: 1px solid var(--border-color); border-radius: .8rem; background: var(--surface-glass); }
   .connections-table tbody > tr:not(.connections-details-row) { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; padding: .85rem; }
   .connections-table td { min-width: 0; display: grid; gap: .18rem; border: 0; padding: 0; overflow-wrap: anywhere; }
   .connections-table td[data-label]::before { color: var(--muted); content: attr(data-label); font: 650 .62rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; text-transform: uppercase; }
   .connections-host, .connections-table td:nth-child(5) { grid-column: 1 / -1; min-width: 0; max-width: none; }
-  .connections-host { margin: -.1rem -.1rem .05rem; border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent) !important; padding: .1rem 2.6rem .7rem .1rem !important; }
+  .connections-host { margin: -.1rem -.1rem .05rem; border-bottom: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent) !important; padding: .1rem 2.6rem .7rem .1rem !important; }
   .connections-card-row.has-close-action .connections-host { padding-right: 5rem !important; }
   .connections-table td:nth-child(3), .connections-rule {
     min-width: 0;
     max-width: none;
-    border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent);
     border-radius: .68rem;
     background: color-mix(in srgb, var(--panel-raised) 58%, transparent);
     padding: .62rem .68rem;
@@ -248,7 +248,7 @@
     align-items: center;
     justify-content: space-between;
     gap: .5rem;
-    border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent);
     border-radius: .68rem;
     background: color-mix(in srgb, var(--bg) 70%, transparent);
     padding: .55rem .62rem;
@@ -258,13 +258,20 @@
   .connections-action { position: absolute; z-index: 2; top: .65rem; right: 2.8rem; width: auto; text-align: left; }
   .connections-close-one { width: 1.8rem; height: 1.8rem; border-radius: .45rem; background: color-mix(in srgb, var(--danger) 8%, transparent); }
   .connections-details-row { display: block; }
-  .connections-details-row td { display: block; border-top: 1px solid var(--border); padding: .85rem; }
+  .connections-details-row td { display: block; border-top: 1px solid var(--border-color); padding: .85rem; }
   .connections-details-row dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .connections-details-row dl > div:nth-child(-n + 3) { grid-column: 1 / -1; }
 }
 
 @media (max-width: 560px) {
   .connections-toolbar > select,
-  .connections-toolbar .connections-device-filter,
-  .connections-mobile-sort { flex-basis: 100%; }
+  .connections-toolbar .connections-device-filter { flex-basis: 100%; }
+  .connections-mobile-sort { flex-basis: calc(100% - 3.35rem); }
 }
+
+.connections-table tbody.connection-closed { color: var(--muted); background: color-mix(in srgb, var(--panel-raised) 58%, var(--panel)); }
+.connection-closed .connections-chain code { color: var(--muted); background: transparent; }
+.connection-closed .connections-host strong { font-weight: 600; }
+.connection-closed-label { display: inline-block; justify-self: start; margin-top: .3rem; border: 1px solid var(--border-color); border-radius: .35rem; padding: .1rem .35rem; font-size: .65rem; font-weight: 550; }
+
+.connections-table .connection-closed td.connections-number > span { color: var(--muted); }
