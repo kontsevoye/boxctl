@@ -17,6 +17,7 @@ import (
 	"github.com/kontsevoye/boxctl/internal/platform/openwrt"
 	"github.com/kontsevoye/boxctl/internal/state"
 	"github.com/kontsevoye/boxctl/internal/update"
+	openwrtfiles "github.com/kontsevoye/boxctl/packaging/openwrt"
 )
 
 const (
@@ -57,6 +58,7 @@ type managerBuildInfo struct {
 	Date                   string `json:"date"`
 	SettingsSchemaVersion  int    `json:"settingsSchemaVersion"`
 	CaptureInjectorVersion int    `json:"captureInjectorVersion"`
+	IntegrationVersion     string `json:"openWrtIntegrationVersion"`
 }
 
 type managerRestartMode string
@@ -68,15 +70,18 @@ const (
 )
 
 type managerUpdateService struct {
-	Layout    state.Layout
-	Store     state.Store
-	Source    managerReleaseSource
-	Installer managerBinaryInstaller
-	Runner    openwrt.Runner
+	Layout          state.Layout
+	Store           state.Store
+	Source          managerReleaseSource
+	Installer       managerBinaryInstaller
+	Runner          openwrt.Runner
+	IntegrationRoot string
 
 	install          func(string, string) error
 	rollback         func(string) error
 	readBuildInfo    func(context.Context, string) (managerBuildInfo, error)
+	readIntegration  func(context.Context, string, string) (openwrtfiles.IntegrationManifest, error)
+	writeIntegration func(string, []byte, os.FileMode) error
 	restartAndVerify func(context.Context, string, string, managerRestartMode) error
 }
 
@@ -93,9 +98,11 @@ func newManagerUpdateService(root, repository string, runner openwrt.Runner) (*m
 	service := &managerUpdateService{
 		Layout: layout, Store: store, Source: update.NewBoxctlSource(client, repository),
 		Installer: &update.Installer{Client: client}, Runner: runner,
-		install: update.Install, rollback: update.Rollback,
+		IntegrationRoot: "/",
+		install:         update.Install, rollback: update.Rollback,
 	}
 	service.readBuildInfo = service.readManagerBuildInfo
+	service.readIntegration = service.readManagerIntegration
 	service.restartAndVerify = service.restartManagerAndVerify
 	return service, nil
 }
@@ -110,8 +117,8 @@ func (actions *Actions) SelfUpdate(ctx context.Context, options cli.SelfUpdateOp
 	if err := actions.requirePlatform(ctx); err != nil {
 		return err
 	}
-	if options.Action != "check" && !options.NoRestart && root != state.DefaultRoot {
-		return errors.New("self-update for a non-default root requires --no-restart")
+	if options.Action != "check" && root != state.DefaultRoot {
+		return errors.New("self-update installs system integration files and requires /opt/boxctl")
 	}
 	service, err := newManagerUpdateService(root, options.Repository, actions.runner)
 	if err != nil {
@@ -228,7 +235,7 @@ func (service *managerUpdateService) Install(ctx context.Context, localFile, req
 		if releaseErr != nil {
 			return result, releaseErr
 		}
-		if !managerUpdateAvailable(current, expectedVersion) {
+		if current != expectedVersion && !managerUpdateAvailable(current, expectedVersion) {
 			return managerUpdateResult{PreviousVersion: current, CurrentVersion: current, Source: release.Tag}, nil
 		}
 		asset, assetErr := release.BoxctlLinuxARM64()
@@ -250,10 +257,14 @@ func (service *managerUpdateService) Install(ctx context.Context, localFile, req
 	if expectedVersion != "" && candidateVersion != expectedVersion {
 		return result, fmt.Errorf("release binary version mismatch: got %s, want %s", candidateVersion, expectedVersion)
 	}
-	if candidateVersion == current {
+	plan, err := service.planIntegration(ctx, target, staged, currentBuild, candidateBuild)
+	if err != nil {
+		return result, fmt.Errorf("prepare OpenWrt integration update: %w", err)
+	}
+	if candidateVersion == current && !plan.Changed && currentBuild.IntegrationVersion == candidateBuild.IntegrationVersion {
 		return managerUpdateResult{PreviousVersion: current, CurrentVersion: current, Source: sourceName}, nil
 	}
-	restartMode, err := chooseManagerRestart(currentBuild, candidateBuild, noRestart, fullRestart, confirm)
+	restartMode, err := chooseManagerRestart(currentBuild, candidateBuild, plan.Changed, noRestart, fullRestart, confirm)
 	if err != nil {
 		return result, err
 	}
@@ -262,29 +273,44 @@ func (service *managerUpdateService) Install(ctx context.Context, localFile, req
 	}
 	transactionContext, cancelTransaction := context.WithTimeout(context.Background(), managerUpdateTransactionLimit)
 	defer cancelTransaction()
+	if err := service.saveIntegrationSnapshot(plan.Before); err != nil {
+		return result, fmt.Errorf("save OpenWrt integration rollback: %w", err)
+	}
 	if err := service.install(staged, target); err != nil {
 		return result, fmt.Errorf("install boxctl update: %w", err)
+	}
+	recoverUpdate := func(cause error) (managerUpdateResult, error) {
+		recoveryContext, cancelRecovery := context.WithTimeout(context.Background(), managerUpdateTransactionLimit)
+		defer cancelRecovery()
+		rollbackErr := service.rollback(target)
+		filesErr := service.applyIntegration(plan.Before.Files, true)
+		var restoreErr error
+		if rollbackErr == nil && filesErr == nil && restartMode != managerRestartNone {
+			restoreErr = service.restartAndVerify(recoveryContext, target, current, managerRestartFull)
+		}
+		return managerUpdateResult{}, errors.Join(cause,
+			wrapUpdateError("restore previous boxctl binary", rollbackErr),
+			wrapUpdateError("restore previous OpenWrt integration", filesErr),
+			wrapUpdateError("restart previous boxctl binary", restoreErr))
+	}
+	if err := service.applyIntegration(plan.After, false); err != nil {
+		return recoverUpdate(err)
 	}
 	result = managerUpdateResult{
 		PreviousVersion: current, CurrentVersion: candidateVersion, Source: sourceName,
 		Changed: true, Restarted: restartMode != managerRestartNone, RestartMode: restartMode,
 	}
 	if restartMode == managerRestartNone {
+		if err := service.verifyIntegration(plan.After, false); err != nil {
+			return recoverUpdate(err)
+		}
 		return result, nil
 	}
 	if err := service.restartAndVerify(transactionContext, target, candidateVersion, restartMode); err != nil {
-		recoveryContext, cancelRecovery := context.WithTimeout(context.Background(), managerUpdateTransactionLimit)
-		defer cancelRecovery()
-		rollbackErr := service.rollback(target)
-		var restoreErr error
-		if rollbackErr == nil {
-			restoreErr = service.restartAndVerify(recoveryContext, target, current, managerRestartFull)
-		}
-		return managerUpdateResult{}, errors.Join(
-			fmt.Errorf("updated boxctl failed verification: %w", err),
-			wrapUpdateError("restore previous boxctl binary", rollbackErr),
-			wrapUpdateError("restart previous boxctl binary", restoreErr),
-		)
+		return recoverUpdate(fmt.Errorf("updated boxctl failed verification: %w", err))
+	}
+	if err := service.verifyIntegration(plan.After, false); err != nil {
+		return recoverUpdate(err)
 	}
 	return result, nil
 }
@@ -314,28 +340,59 @@ func (service *managerUpdateService) Rollback(ctx context.Context, noRestart, fu
 	if err != nil {
 		return result, fmt.Errorf("read rollback boxctl version: %w", err)
 	}
-	restartMode, err := chooseManagerRestart(currentBuild, previousBuild, noRestart, fullRestart, confirm)
+	snapshot, filesChanged, err := service.rollbackIntegration(previousTarget)
+	if err != nil {
+		return result, err
+	}
+	restartMode, err := chooseManagerRestart(currentBuild, previousBuild, filesChanged, noRestart, fullRestart, confirm)
 	if err != nil {
 		return result, err
 	}
 	current, previous := currentBuild.Version, previousBuild.Version
+	paths := make(map[string]bool)
+	for _, file := range snapshot.Files {
+		paths[file.Path] = true
+	}
+	before, err := service.snapshotIntegration(target, paths)
+	if err != nil {
+		return result, err
+	}
 	transactionContext, cancelTransaction := context.WithTimeout(context.Background(), managerUpdateTransactionLimit)
 	defer cancelTransaction()
 	if err := service.rollback(target); err != nil {
 		return result, err
 	}
-	result = managerUpdateResult{PreviousVersion: current, CurrentVersion: previous, Source: "rollback", Changed: true, Restarted: restartMode != managerRestartNone, RestartMode: restartMode}
-	if restartMode == managerRestartNone {
-		return result, nil
+	recoverRollback := func(cause error) (managerUpdateResult, error) {
+		recoveryContext, cancelRecovery := context.WithTimeout(context.Background(), managerUpdateTransactionLimit)
+		defer cancelRecovery()
+		binaryErr := service.install(target+".failed", target)
+		filesErr := service.applyIntegration(before.Files, true)
+		var restartErr error
+		if binaryErr == nil && filesErr == nil && restartMode != managerRestartNone {
+			restartErr = service.restartAndVerify(recoveryContext, target, current, managerRestartFull)
+		}
+		return managerUpdateResult{}, errors.Join(cause,
+			wrapUpdateError("recover binary after failed rollback", binaryErr),
+			wrapUpdateError("recover integration after failed rollback", filesErr),
+			wrapUpdateError("restart manager after failed rollback", restartErr))
 	}
-	if err := service.restartAndVerify(transactionContext, target, previous, restartMode); err != nil {
-		return managerUpdateResult{}, fmt.Errorf("rolled back boxctl failed verification: %w", err)
+	if err := service.applyIntegration(snapshot.Files, true); err != nil {
+		return recoverRollback(fmt.Errorf("restore OpenWrt integration: %w", err))
+	}
+	result = managerUpdateResult{PreviousVersion: current, CurrentVersion: previous, Source: "rollback", Changed: true, Restarted: restartMode != managerRestartNone, RestartMode: restartMode}
+	if restartMode != managerRestartNone {
+		if err := service.restartAndVerify(transactionContext, target, previous, restartMode); err != nil {
+			return recoverRollback(fmt.Errorf("rolled back boxctl failed verification: %w", err))
+		}
+	}
+	if err := service.verifyIntegration(snapshot.Files, true); err != nil {
+		return recoverRollback(err)
 	}
 	return result, nil
 }
 
 func (service *managerUpdateService) validate() error {
-	if service == nil || service.Source == nil || service.Installer == nil || service.Runner == nil || service.install == nil || service.rollback == nil || service.readBuildInfo == nil || service.restartAndVerify == nil {
+	if service == nil || service.Source == nil || service.Installer == nil || service.Runner == nil || service.install == nil || service.rollback == nil || service.readBuildInfo == nil || service.readIntegration == nil || service.restartAndVerify == nil || !filepath.IsAbs(service.IntegrationRoot) {
 		return errors.New("boxctl self-update service is not initialized")
 	}
 	return nil
@@ -461,7 +518,7 @@ func (service *managerUpdateService) restartManagerAndVerify(ctx context.Context
 	return nil
 }
 
-func chooseManagerRestart(current, candidate managerBuildInfo, noRestart, fullRestart bool, confirm func(string) (bool, error)) (managerRestartMode, error) {
+func chooseManagerRestart(current, candidate managerBuildInfo, filesChanged, noRestart, fullRestart bool, confirm func(string) (bool, error)) (managerRestartMode, error) {
 	if noRestart && fullRestart {
 		return managerRestartNone, errors.New("--no-restart and --full-restart cannot be used together")
 	}
@@ -470,11 +527,12 @@ func chooseManagerRestart(current, candidate managerBuildInfo, noRestart, fullRe
 	}
 	compatible := current.SettingsSchemaVersion > 0 && current.CaptureInjectorVersion > 0 &&
 		current.SettingsSchemaVersion == candidate.SettingsSchemaVersion &&
-		current.CaptureInjectorVersion == candidate.CaptureInjectorVersion
+		current.CaptureInjectorVersion == candidate.CaptureInjectorVersion &&
+		current.IntegrationVersion != "" && current.IntegrationVersion == candidate.IntegrationVersion && !filesChanged
 	if compatible && !fullRestart {
 		return managerRestartOnly, nil
 	}
-	warning := fmt.Sprintf("WARNING: boxctl %s -> %s changes runtime compatibility (settings schema %d -> %d; capture injector %d -> %d).", current.Version, candidate.Version, current.SettingsSchemaVersion, candidate.SettingsSchemaVersion, current.CaptureInjectorVersion, candidate.CaptureInjectorVersion)
+	warning := fmt.Sprintf("WARNING: boxctl %s -> %s requires a full restart (settings schema %d -> %d; capture injector %d -> %d; OpenWrt integration %s -> %s; installed files differ: %t).", current.Version, candidate.Version, current.SettingsSchemaVersion, candidate.SettingsSchemaVersion, current.CaptureInjectorVersion, candidate.CaptureInjectorVersion, current.IntegrationVersion, candidate.IntegrationVersion, filesChanged)
 	if fullRestart {
 		if confirm != nil {
 			if _, err := confirm(warning); err != nil {

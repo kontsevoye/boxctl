@@ -199,6 +199,7 @@ func TestInstallerSupportsFreshInstallAndUpdate(t *testing.T) {
 		`integration_files_match`,
 		`settingsSchemaVersion`,
 		`captureInjectorVersion`,
+		`openWrtIntegrationVersion`,
 		`self-update install --file "$SOURCE_BINARY" --sha256 "$digest"`,
 		`refusing to continue with a full reinstall`,
 		`ROOT_WAS_PRESENT=1`,

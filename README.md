@@ -377,19 +377,43 @@ log. Web installation is available for release builds at `/opt/boxctl`.
 `vYYYY.MM.N` tag and contain a raw `boxctl-linux-arm64-YYYY.MM.N` asset with
 GitHub SHA-256 digest
 metadata. The candidate is size-bounded, checked as a Linux/AArch64 ELF,
-executed only for `boxctl version`, and required to report the release version.
+queried with `version --json` and `integration --json`, and required to report
+the release version and a valid embedded integration manifest.
 
 The binary is staged beside `/opt/boxctl/bin/boxctl`, atomically swapped into
-place, and retained as `boxctl.prev`. Each binary reports an internal settings
-schema version and capture-injector version. When both match, the default
+place, and retained as `boxctl.prev`. Each binary includes the OpenWrt init
+script, hotplug hooks, APK protection and sysupgrade retention files, and UCI
+defaults from the same source files used by the bundle and APK. Its
+`openWrtIntegrationVersion` is a SHA-256 fingerprint of their paths, contents,
+permissions, and preservation policy; it changes automatically with the files.
+
+The updater compares this fingerprint, the settings schema and capture-injector
+versions, and the actual installed integration files. When all match, the default
 activation re-executes only the manager/web image in place: the exact active-core process is
 verified and adopted by the new manager while active connections, nftables,
-policy routing, and DNS stay in place. A compatibility change requires an
+policy routing, and DNS stay in place. Changed, missing, or locally modified
+integration files, an unknown integration version, or a compatibility change require an
 interactive confirmation because it restarts the active core and interrupts active
 connections. `--full-restart` forces that path and acts as non-interactive
-approval; `--no-restart` only swaps the binary. The CLI requires the new
-manager to remain running and restores the previous binary if verification
-fails. Configuration and state under `/opt/boxctl` are not replaced.
+approval; `--no-restart` installs the binary and integration without activating
+them. Mutating self-update operations require the standard `/opt/boxctl` root.
+
+Owned integration files are atomically replaced and retired hooks are removed.
+Existing `/etc/config/boxctl` contents and permissions are preserved; defaults
+are installed only when it is absent. Configuration and state under `/opt/boxctl`
+are not replaced. Private integration snapshots are paired with the exact binary
+SHA-256. Failed file installation, activation, or integration verification restores
+the previous binary and files; a manual rollback also restores the matching
+integration while retaining current UCI settings.
+
+Older self-updaters only replace the binary. Install the first release with
+integration-aware updates through the full OpenWrt bundle/deployment path;
+subsequent UI and offline self-updates carry all integration files themselves.
+Alternatively, invoke the new verified binary's `self-update install --file`
+command from a temporary directory with `--full-restart`; its updater can migrate
+an installed legacy binary and its service files in the same transaction.
+The explicit CLI install command can also repair stale integration files when
+the binary already has the requested release version.
 
 For an offline update, copy the raw binary and its generated `.sha256` file to
 the router:
@@ -401,7 +425,8 @@ boxctl self-update install --file /tmp/boxctl-linux-arm64-2025.01.15
 The updater reads `FILE.sha256` automatically. An explicit 64-character digest
 may instead be provided with `--sha256`. Local files without either checksum
 are rejected. `boxctl self-update rollback` restores the one retained previous
-binary.
+binary and its saved integration files. Rollbacks lacking a matching integration
+snapshot are rejected before mutation; use a full bundle for legacy releases.
 
 ## sing-box engine artifacts
 

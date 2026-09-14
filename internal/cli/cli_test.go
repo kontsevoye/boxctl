@@ -3,11 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/kontsevoye/boxctl/internal/state"
+	openwrtfiles "github.com/kontsevoye/boxctl/packaging/openwrt"
 )
 
 type actionRecorder struct {
@@ -95,6 +97,23 @@ func TestVersionJSONIncludesCompatibilityVersions(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), `"settingsSchemaVersion":1`) || !strings.Contains(output.String(), `"captureInjectorVersion":1`) {
 		t.Fatalf("version JSON = %s", output.String())
+	}
+	var version struct {
+		IntegrationVersion string `json:"openWrtIntegrationVersion"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &version); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := Execute(context.Background(), []string{"integration", "--json"}, Streams{Out: &output}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var manifest openwrtfiles.IntegrationManifest
+	if err := json.Unmarshal(output.Bytes(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := manifest.Validate(); err != nil || version.IntegrationVersion != manifest.Version {
+		t.Fatalf("version and exported integration differ: %v", err)
 	}
 }
 

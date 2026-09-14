@@ -16,6 +16,7 @@ import (
 	"github.com/kontsevoye/boxctl/internal/platform/openwrt"
 	"github.com/kontsevoye/boxctl/internal/state"
 	"github.com/kontsevoye/boxctl/internal/update"
+	openwrtfiles "github.com/kontsevoye/boxctl/packaging/openwrt"
 )
 
 type managerReleaseSourceFake struct{ release update.Release }
@@ -149,6 +150,7 @@ func TestManagerUpdateFromLocalFileAndManualRollback(t *testing.T) {
 		Installer: &update.Installer{}, Runner: unusedManagerRunner{}, install: update.Install, rollback: update.Rollback,
 	}
 	service.readBuildInfo = readManagerTestBuildInfo
+	configureManagerTestIntegration(t, service)
 	service.restartAndVerify = func(context.Context, string, string, managerRestartMode) error { return nil }
 
 	result, err := service.Install(context.Background(), candidate, "", true, false, nil)
@@ -196,29 +198,37 @@ func TestParseManagerVersionOutputMatchesVersionCommand(t *testing.T) {
 }
 
 func TestChooseManagerRestartUsesCompatibilityAndConfirmation(t *testing.T) {
-	compatible := managerBuildInfo{Version: "2025.01.14", SettingsSchemaVersion: 1, CaptureInjectorVersion: 2}
-	next := managerBuildInfo{Version: "2025.01.15", SettingsSchemaVersion: 1, CaptureInjectorVersion: 2}
-	if mode, err := chooseManagerRestart(compatible, next, false, false, nil); err != nil || mode != managerRestartOnly {
+	compatible := managerBuildInfo{Version: "2025.01.14", SettingsSchemaVersion: 1, CaptureInjectorVersion: 2, IntegrationVersion: "files-v1"}
+	next := managerBuildInfo{Version: "2025.01.15", SettingsSchemaVersion: 1, CaptureInjectorVersion: 2, IntegrationVersion: "files-v1"}
+	if mode, err := chooseManagerRestart(compatible, next, false, false, false, nil); err != nil || mode != managerRestartOnly {
 		t.Fatalf("compatible restart = %q, %v", mode, err)
 	}
-	if mode, err := chooseManagerRestart(compatible, next, false, true, nil); err != nil || mode != managerRestartFull {
+	if mode, err := chooseManagerRestart(compatible, next, false, false, true, nil); err != nil || mode != managerRestartFull {
 		t.Fatalf("forced restart = %q, %v", mode, err)
 	}
 	changed := next
 	changed.CaptureInjectorVersion = 3
 	called := false
-	mode, err := chooseManagerRestart(compatible, changed, false, false, func(warning string) (bool, error) {
+	mode, err := chooseManagerRestart(compatible, changed, false, false, false, func(warning string) (bool, error) {
 		called = strings.Contains(warning, "capture injector 2 -> 3")
 		return true, nil
 	})
 	if err != nil || mode != managerRestartFull || !called {
 		t.Fatalf("confirmed incompatible restart = %q, %v, called=%t", mode, err, called)
 	}
-	if _, err := chooseManagerRestart(compatible, changed, false, false, func(string) (bool, error) { return false, nil }); err == nil {
+	if _, err := chooseManagerRestart(compatible, changed, false, false, false, func(string) (bool, error) { return false, nil }); err == nil {
 		t.Fatal("declined incompatible restart was accepted")
 	}
-	if mode, err := chooseManagerRestart(compatible, changed, true, false, nil); err != nil || mode != managerRestartNone {
+	if mode, err := chooseManagerRestart(compatible, changed, false, true, false, nil); err != nil || mode != managerRestartNone {
 		t.Fatalf("no-restart = %q, %v", mode, err)
+	}
+	// A new default UCI template changes the manifest even when a preserved
+	// user configuration means there are no on-disk files to replace.
+	changed = next
+	changed.IntegrationVersion = "files-v2"
+	mode, err = chooseManagerRestart(compatible, changed, false, false, false, func(string) (bool, error) { return true, nil })
+	if err != nil || mode != managerRestartFull {
+		t.Fatalf("integration-version-only change = %q, %v", mode, err)
 	}
 }
 
@@ -259,6 +269,7 @@ func managerTestUpdateService(t *testing.T, root, latest string) *managerUpdateS
 		install: update.Install, rollback: update.Rollback,
 	}
 	service.readBuildInfo = readManagerTestBuildInfo
+	configureManagerTestIntegration(t, service)
 	service.restartAndVerify = func(context.Context, string, string, managerRestartMode) error { return nil }
 	return service
 }
@@ -333,7 +344,8 @@ func readManagerTestVersion(_ context.Context, path string) (string, error) {
 
 func readManagerTestBuildInfo(ctx context.Context, path string) (managerBuildInfo, error) {
 	version, err := readManagerTestVersion(ctx, path)
-	return managerBuildInfo{Version: version, SettingsSchemaVersion: 1, CaptureInjectorVersion: 1}, err
+	manifest, manifestErr := openwrtfiles.Manifest()
+	return managerBuildInfo{Version: version, SettingsSchemaVersion: 1, CaptureInjectorVersion: 1, IntegrationVersion: manifest.Version}, errors.Join(err, manifestErr)
 }
 
 func assertManagerBinaryVersion(t *testing.T, path, version string) {
@@ -344,5 +356,20 @@ func assertManagerBinaryVersion(t *testing.T, path, version string) {
 	}
 	if actual != version {
 		t.Fatalf("%s version = %q, want %q", path, actual, version)
+	}
+}
+
+func configureManagerTestIntegration(t *testing.T, service *managerUpdateService) {
+	t.Helper()
+	service.IntegrationRoot = t.TempDir()
+	manifest, err := openwrtfiles.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.readIntegration = func(context.Context, string, string) (openwrtfiles.IntegrationManifest, error) { return manifest, nil }
+	for _, file := range manifest.Files {
+		if err := (state.Store{Root: service.IntegrationRoot}).Write(file.Path, file.Data, os.FileMode(file.Mode)); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

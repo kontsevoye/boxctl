@@ -28,12 +28,17 @@ keys, router backups, or unredacted configuration files in a public issue.
 - Core updates require an official GitHub release-asset SHA-256 digest, a size
   match, a valid Linux/AArch64 ELF, native core validation, and an atomic swap
   retaining the previous binary.
-- Manager self-updates are CLI-only and require OpenWrt. GitHub updates accept
+- Manager self-updates run in a CLI process or an independent web-update worker
+  and require OpenWrt. GitHub updates accept
   only canonical boxctl CalVer releases and digest-attested Linux/AArch64
   assets; offline files require an explicit or companion SHA-256. The manager
-  binary is atomically replaced, procd must remain running after restart, and a
-  failed restart restores the retained previous binary. Self-update never
-  replaces configuration or state.
+  binary and its embedded, fingerprinted OpenWrt service files are atomically
+  replaced per file. Integration paths are restricted to boxctl-owned names;
+  symlink targets and parents are rejected. Compatibility and installed-file
+  checks select manager-only activation or a confirmed full core restart.
+  Failed installation or verification restores the retained previous binary
+  and its paired integration snapshot. Existing UCI configuration and manager
+  configuration/state are preserved.
 - Restore rejects absolute paths, traversal, links, duplicate entries,
   oversized payloads, and files outside the documented state allow-list.
 - The optional Zashboard integration is disabled by default and is enabled

@@ -125,7 +125,8 @@ same_integration_file() {
 }
 
 integration_files_match() {
-	same_integration_file "${SCRIPT_DIR}/files/etc/init.d/boxctl" "$SERVICE" &&
+	[ -f "$CONFIG" ] && [ ! -L "$CONFIG" ] &&
+		same_integration_file "${SCRIPT_DIR}/files/etc/init.d/boxctl" "$SERVICE" &&
 		same_integration_file "${SCRIPT_DIR}/files/etc/hotplug.d/iface/40-boxctl" "$HOTPLUG_IFACE" &&
 		same_integration_file "${SCRIPT_DIR}/files/etc/hotplug.d/net/99-boxctl-tun" "$HOTPLUG_TUN" &&
 		same_integration_file "${SCRIPT_DIR}/files/etc/apk/protected_paths.d/boxctl.list" "$APK_PATHS" &&
@@ -166,6 +167,12 @@ try_seamless_update() {
 	current_capture=$(jsonfilter -s "$current_build" -e '@.captureInjectorVersion' 2>/dev/null) || return 1
 	candidate_settings=$(jsonfilter -s "$candidate_build" -e '@.settingsSchemaVersion' 2>/dev/null) || return 1
 	candidate_capture=$(jsonfilter -s "$candidate_build" -e '@.captureInjectorVersion' 2>/dev/null) || return 1
+	current_integration=$(jsonfilter -s "$current_build" -e '@.openWrtIntegrationVersion' 2>/dev/null) || return 1
+	candidate_integration=$(jsonfilter -s "$candidate_build" -e '@.openWrtIntegrationVersion' 2>/dev/null) || return 1
+	if [ -z "$current_integration" ] || [ "$current_integration" != "$candidate_integration" ]; then
+		printf '%s\n' 'seamless update unavailable: OpenWrt integration version changed or is unknown'
+		return 1
+	fi
 	for compatibility_version in \
 		"$current_settings" "$current_capture" "$candidate_settings" "$candidate_capture"
 	do

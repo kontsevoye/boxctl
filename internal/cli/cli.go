@@ -13,6 +13,7 @@ import (
 
 	"github.com/kontsevoye/boxctl/internal/buildinfo"
 	"github.com/kontsevoye/boxctl/internal/state"
+	openwrtfiles "github.com/kontsevoye/boxctl/packaging/openwrt"
 )
 
 // Streams contains the command's standard streams.
@@ -133,19 +134,33 @@ func Execute(ctx context.Context, args []string, streams Streams, actions Action
 		return nil
 	case "version", "-v", "--version":
 		if len(args) == 2 && args[1] == "--json" {
+			manifest, err := openwrtfiles.Manifest()
+			if err != nil {
+				return err
+			}
 			return json.NewEncoder(streams.Out).Encode(struct {
 				Version                string `json:"version"`
 				Commit                 string `json:"commit"`
 				Date                   string `json:"date"`
 				SettingsSchemaVersion  int    `json:"settingsSchemaVersion"`
 				CaptureInjectorVersion int    `json:"captureInjectorVersion"`
-			}{buildinfo.Version, buildinfo.Commit, buildinfo.Date, buildinfo.SettingsSchemaVersion, buildinfo.CaptureInjectorVersion})
+				IntegrationVersion     string `json:"openWrtIntegrationVersion"`
+			}{buildinfo.Version, buildinfo.Commit, buildinfo.Date, buildinfo.SettingsSchemaVersion, buildinfo.CaptureInjectorVersion, manifest.Version})
 		}
 		if len(args) != 1 {
 			return usage("version accepts only --json")
 		}
 		_, err := fmt.Fprintf(streams.Out, "boxctl %s (commit %s, built %s)\n", buildinfo.Version, buildinfo.Commit, buildinfo.Date)
 		return err
+	case "integration":
+		if len(args) != 2 || args[1] != "--json" {
+			return usage("integration requires --json")
+		}
+		manifest, err := openwrtfiles.Manifest()
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(streams.Out).Encode(manifest)
 	case "serve":
 		fs := newFlagSet("serve", streams.Err)
 		options := ServeOptions{}
