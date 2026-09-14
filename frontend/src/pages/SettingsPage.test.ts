@@ -4,6 +4,7 @@ import { externalDashboardSupported, isCleanCoreInstall, parsePorts, settingsPor
 
 describe('settings section availability', () => {
   it('keeps a reachable selected panel when backup capability is unavailable', () => {
+    expect(settingsSectionFromSearch('?section=passkeys', false)).toBe('passkeys')
     expect(settingsSectionFromSearch('?section=backups', false)).toBe('general')
     expect(settingsSectionFromSearch('?section=backups', true)).toBe('backups')
     expect(settingsSectionFromSearch('?section=updates', false)).toBe('updates')

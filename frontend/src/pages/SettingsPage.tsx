@@ -1,4 +1,4 @@
-import { Archive, ArrowUpCircle, Check, Circle, Globe, Network, RefreshCw, RotateCcw, Save, SlidersHorizontal } from 'lucide-react'
+import { Archive, ArrowUpCircle, Check, Circle, Globe, Network, RefreshCw, RotateCcw, Save, SlidersHorizontal, UserKey } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { APIError, request, requestWithFallback } from '../api'
 import { useApp } from '../app-context'
@@ -10,6 +10,7 @@ import { Toast } from '../components/Toast'
 import { ManagerUpdatePanel } from '../components/ManagerUpdatePanel'
 import { ExternalDashboardPanel } from '../components/ExternalDashboardPanel'
 import { ManagementSettingsPanel } from '../components/ManagementSettingsPanel'
+import { PasskeysPanel } from '../components/PasskeysPanel'
 import { useFallbackQuery, useQuery } from '../hooks'
 import { useI18n } from '../i18n'
 import { legacyEngine, selectedEngine } from '../engines'
@@ -25,7 +26,7 @@ export type PortListError = 'invalid' | 'too_many'
 
 const portListFields: PortListField[] = ['bypassTCPPorts', 'bypassUDPPorts', 'proxyOnlyTCPPorts', 'proxyOnlyUDPPorts']
 
-type SettingsSection = 'general' | 'routing' | 'panel' | 'updates' | 'backups'
+type SettingsSection = 'general' | 'routing' | 'panel' | 'passkeys' | 'updates' | 'backups'
 interface SettingsDraft {
   form: Settings
   saved: Settings
@@ -180,6 +181,7 @@ export function SettingsPage() {
     { id: 'general' as const, label: t('settingsGeneral'), icon: SlidersHorizontal },
     { id: 'routing' as const, label: t('settingsRouting'), icon: Network },
     { id: 'panel' as const, label: t('settingsPanel'), icon: Globe },
+    { id: 'passkeys' as const, label: t('passkeys'), icon: UserKey },
     { id: 'updates' as const, label: t('settingsUpdates'), icon: ArrowUpCircle },
     ...(backupsAvailable ? [{ id: 'backups' as const, label: t('backups'), icon: Archive }] : []),
   ]
@@ -305,6 +307,7 @@ export function SettingsPage() {
         </div>
       </form>}
       <div id="settings-panel-panel" className="settings-tab-panel" role="tabpanel" aria-labelledby="settings-panel-tab" hidden={section !== 'panel'}><ManagementSettingsPanel active={section === 'panel'} /></div>
+      {section === 'passkeys' && <div id="settings-passkeys-panel" className="settings-tab-panel" role="tabpanel" aria-labelledby="settings-passkeys-tab"><PasskeysPanel /></div>}
       <div id="settings-updates-panel" className="settings-tab-panel" role="tabpanel" aria-labelledby="settings-updates-tab" hidden={section !== 'updates'}>
       <ManagerUpdatePanel />
 		<div className="du-card panel settings-section">
@@ -322,7 +325,7 @@ export function SettingsPage() {
 
 export function settingsSectionFromSearch(search: string, backupsAvailable: boolean): SettingsSection {
   const section = new URLSearchParams(search).get('section')
-  return section === 'routing' || section === 'panel' || section === 'updates' || (section === 'backups' && backupsAvailable) ? section : 'general'
+  return section === 'routing' || section === 'panel' || section === 'passkeys' || section === 'updates' || (section === 'backups' && backupsAvailable) ? section : 'general'
 }
 
 function asSettingsError(reason: unknown): APIError {

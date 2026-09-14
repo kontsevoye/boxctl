@@ -1212,6 +1212,7 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		services.ManagerUpdates = &ManagerWebUpdater{Service: updater, Checker: managerUpdates, Logger: logger}
 	}
 	services.SessionSecrets = credentials
+	services.Passkeys = credentials
 	if root == state.DefaultRoot {
 		services.ManagementSettings = &ManagementSettingsService{
 			UCI: openwrt.ManagementUCI{Runner: runner}, State: mihomoPreparer.State, Active: options.ManagementConfig,

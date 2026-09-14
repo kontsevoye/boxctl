@@ -586,3 +586,26 @@ func writeFixture(t *testing.T, path, content string, mode os.FileMode) {
 		t.Fatal(err)
 	}
 }
+
+func TestBackupsExcludePasskeysAndPreserveLocalRegistrations(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, filepath.Join(root, portableStateDir, "password"), "current-password", 0o600)
+	writeFixture(t, filepath.Join(root, portableStateDir, "passkeys.v1.json"), "current-passkeys", 0o600)
+	writeFixture(t, filepath.Join(root, portableStateDir, ".passkeys.v1.json-123"), "interrupted-write", 0o600)
+	for _, name := range []string{"passkeys.v1.json", ".passkeys.v1.json-123"} {
+		if !shouldExcludeExport(portableStateDir+"/"+name, ExportOptions{IncludeAdminPassword: true}) {
+			t.Fatalf("exported %s", name)
+		}
+	}
+	archive := writeArchiveFixture(t, map[string]string{portableStateDir + "/settings.json": "restored-settings", portableStateDir + "/passkeys.v1.json": "foreign-passkey", portableStateDir + "/password": "restored-password"})
+	if err := (Manager{Root: root}).Restore(context.Background(), archive); err == nil {
+		t.Fatal("accepted foreign passkey from archive")
+	}
+	archive = writeArchiveFixture(t, map[string]string{portableStateDir + "/settings.json": "restored-settings", portableStateDir + "/password": "restored-password"})
+	if err := (Manager{Root: root}).Restore(context.Background(), archive); err != nil {
+		t.Fatal(err)
+	}
+	assertFixtureContent(t, filepath.Join(root, portableStateDir, "passkeys.v1.json"), "current-passkeys")
+	assertFixtureContent(t, filepath.Join(root, portableStateDir, "password"), "restored-password")
+	assertFixtureContent(t, filepath.Join(root, portableStateDir, "settings.json"), "restored-settings")
+}

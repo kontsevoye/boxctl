@@ -20,6 +20,13 @@ keys, router backups, or unredacted configuration files in a public issue.
   deployments behind additional DNS names must explicitly list hostnames in
   `BOXCTL_ALLOWED_HOSTS`. A TLS-terminating reverse proxy should instead set an
   exact `BOXCTL_PUBLIC_ORIGIN` and preserve the original `Host` header.
+- Passkey login requires authenticator user verification and checks the exact
+  effective origin and RP domain. Challenges are single-use, held in bounded
+  memory, and expire after five minutes. Registration additionally requires an
+  authenticated session, CSRF, and password confirmation bound to that session
+  and the current password record. Deletion requires a fresh password check.
+  Only public credential records are stored; private keys stay with the
+  authenticator. Passkeys use the same session cookies as password login.
 - Profile and backup files contain credentials. New files are mode `0600`, and
   backup/session directories are mode `0700`.
 - Ordinary profile DTOs, errors, and mutation results never return the Mihomo
@@ -56,8 +63,10 @@ Portable backups always include the portable parts of `.boxctl`, `cache.db`,
 Administrator password, downloaded `proxy-providers`/`rule-providers`, and the
 external `ui` dashboard are separate opt-in export groups. They exclude core
 binaries, nested backups, runtime/import/lock/DNS transaction state, process
-ownership and manager-handoff records, and session secrets. Restore preserves
-the current administrator password when the archive does not contain one.
+ownership and manager-handoff records, session secrets, and passkey records.
+Restore preserves the current administrator password when the archive does
+not contain one and always preserves the destination's local passkeys.
+Archives containing passkey records are rejected.
 
 Production limits are 10,000 files, 32 MiB per file, 128 MiB expanded data,
 and 32 MiB for the compressed archive or upload. When selective routing was

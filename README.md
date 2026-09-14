@@ -31,7 +31,7 @@ Actual boxctl interface with demo data. English · 30 seconds.
 
 ## Features
 
-- built-in English and Russian web interface with password authentication;
+- built-in English and Russian web interface with password and passkey authentication;
 - engine-aware start, stop, restart, health, and capability contracts;
 - TPROXY, hybrid, TUN, mixed, and mixed2 capture modes;
 - validated engine-native Mihomo YAML and sing-box JSON profiles;
@@ -314,6 +314,31 @@ to the browser. These settings are not duplicated in the manager's JSON state.
 The authenticated API uses `GET/PUT /api/v1/settings/management` and
 `POST /api/v1/settings/management/apply`; writes and apply requests require the
 revision returned by GET. Both mutations also require the session CSRF token.
+
+### Passkeys
+
+**Settings → Passkeys** lists registered passkeys, their names, registration
+addresses, and last-used times. Adding or deleting a passkey requires the
+current administrator password, including when signed in with a passkey.
+Changes apply immediately without a service restart.
+
+**Sign in with a passkey**, below the password sign-in button, signs in without
+asking for the administrator password. The authenticator must verify the user
+(for example, with a fingerprint, face recognition, or its PIN). The password
+remains available as a fallback.
+
+Passkeys require an HTTPS domain name; `http://localhost` works for local
+development. IP-address URLs and ordinary HTTP LAN URLs cannot use passkeys.
+Use **Settings → Panel** to configure the existing HTTPS/public-origin options.
+Passkeys are scoped to the domain used to register them; after moving to a
+new domain, sign in with the password and register a passkey there.
+
+The panel stores public credential records in `.boxctl/passkeys.v1.json` with
+mode `0600`; private keys remain with the authenticator or passkey provider.
+Passkeys survive service restarts and normal password changes. Application
+backups exclude these records, and restore preserves the destination's local
+passkeys. An archive cannot register or reinstate a passkey. On a fresh
+installation, register passkeys again after administrator setup.
 
 ### Optional external dashboard
 

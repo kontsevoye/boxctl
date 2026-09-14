@@ -27,7 +27,7 @@ const (
 	passwordSaltSize = 16
 )
 
-// CredentialStore adapts private on-disk state to password-only authentication.
+// CredentialStore adapts private on-disk state to administrator authentication.
 type CredentialStore struct {
 	State state.Store
 }
@@ -91,6 +91,9 @@ func (store CredentialStore) InitializeAdmin(ctx context.Context, password strin
 		// making the credential visible.
 		if err := store.State.RemoveRegular(sessionStatePath); err != nil {
 			return fmt.Errorf("revoke stale persisted sessions: %w", err)
+		}
+		if err := store.State.RemoveRegular(passkeyStatePath); err != nil {
+			return fmt.Errorf("revoke stale passkeys: %w", err)
 		}
 		return store.State.WritePasswordRecordOpaque(passwordPath, record)
 	})

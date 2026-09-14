@@ -587,6 +587,10 @@ func (m Manager) BeginRestore(ctx context.Context, archivePath string) (*Restore
 	if err := preserveLocalAdminPassword(root, payload); err != nil {
 		return nil, err
 	}
+	// Passkeys belong to this installation and cannot be introduced by an archive.
+	if err := preserveLocalCredentialFile(root, payload, "passkeys.v1.json", 4<<20); err != nil {
+		return nil, err
+	}
 	transaction, err := beginSwapPayload(root, payload, staging)
 	if err != nil {
 		if transaction != nil && transaction.retainStaging {
@@ -602,7 +606,10 @@ func (m Manager) BeginRestore(ctx context.Context, archivePath string) (*Restore
 // the imported archive contains portable state but intentionally omits the
 // password. An explicitly included backup password still replaces it.
 func preserveLocalAdminPassword(root, payload string) error {
-	const maximumPasswordRecordBytes = 16 << 10
+	return preserveLocalCredentialFile(root, payload, "password", 16<<10)
+}
+
+func preserveLocalCredentialFile(root, payload, name string, maximumBytes int64) error {
 	stagedState := filepath.Join(payload, portableStateDir)
 	stagedInfo, err := os.Lstat(stagedState)
 	if errors.Is(err, os.ErrNotExist) {
@@ -614,58 +621,58 @@ func preserveLocalAdminPassword(root, payload string) error {
 	if stagedInfo.Mode()&os.ModeSymlink != 0 || !stagedInfo.IsDir() {
 		return errors.New("staged portable state is not a directory")
 	}
-	destination := filepath.Join(stagedState, "password")
+	destination := filepath.Join(stagedState, name)
 	if info, destinationErr := os.Lstat(destination); destinationErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return errors.New("staged administrator password is not a regular file")
+			return errors.New("staged administrator credential is not a regular file")
 		}
 		return nil
 	} else if !errors.Is(destinationErr, os.ErrNotExist) {
-		return fmt.Errorf("inspect staged administrator password: %w", destinationErr)
+		return fmt.Errorf("inspect staged administrator credential: %w", destinationErr)
 	}
 
-	source := filepath.Join(root, portableStateDir, "password")
+	source := filepath.Join(root, portableStateDir, name)
 	info, err := os.Lstat(source)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect current administrator password: %w", err)
+		return fmt.Errorf("inspect current administrator credential: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maximumPasswordRecordBytes {
-		return errors.New("current administrator password is not a bounded regular file")
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maximumBytes {
+		return errors.New("current administrator credential is not a bounded regular file")
 	}
 	sourceFile, err := os.Open(source)
 	if err != nil {
-		return fmt.Errorf("open current administrator password: %w", err)
+		return fmt.Errorf("open current administrator credential: %w", err)
 	}
 	openedInfo, statErr := sourceFile.Stat()
-	if statErr != nil || !os.SameFile(info, openedInfo) || !openedInfo.Mode().IsRegular() || openedInfo.Size() > maximumPasswordRecordBytes {
+	if statErr != nil || !os.SameFile(info, openedInfo) || !openedInfo.Mode().IsRegular() || openedInfo.Size() > maximumBytes {
 		_ = sourceFile.Close()
-		return errors.New("current administrator password changed during inspection")
+		return errors.New("current administrator credential changed during inspection")
 	}
-	content, readErr := io.ReadAll(io.LimitReader(sourceFile, maximumPasswordRecordBytes+1))
+	content, readErr := io.ReadAll(io.LimitReader(sourceFile, maximumBytes+1))
 	closeErr := sourceFile.Close()
-	if len(content) > maximumPasswordRecordBytes {
-		return errors.New("current administrator password exceeds size limit")
+	if int64(len(content)) > maximumBytes {
+		return errors.New("current administrator credential exceeds size limit")
 	}
 	if readErr != nil || closeErr != nil {
-		return fmt.Errorf("read current administrator password: %w", errors.Join(readErr, closeErr))
+		return fmt.Errorf("read current administrator credential: %w", errors.Join(readErr, closeErr))
 	}
 	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return fmt.Errorf("stage current administrator password: %w", err)
+		return fmt.Errorf("stage current administrator credential: %w", err)
 	}
 	if _, err := file.Write(content); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("write current administrator password: %w", err)
+		return fmt.Errorf("write current administrator credential: %w", err)
 	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("sync current administrator password: %w", err)
+		return fmt.Errorf("sync current administrator credential: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("close current administrator password: %w", err)
+		return fmt.Errorf("close current administrator credential: %w", err)
 	}
 	if err := syncDirectory(stagedState); err != nil {
 		return fmt.Errorf("sync staged portable state: %w", err)
@@ -1039,7 +1046,8 @@ func shouldExcludeArchivePath(original, restoreRelative string) bool {
 
 func shouldExcludeStatePath(relative, stateDir string) bool {
 	base := strings.ToLower(path.Base(relative))
-	return withinArchivePath(relative, stateDir+"/runtime") ||
+	return (withinArchivePath(relative, stateDir) && strings.HasPrefix(strings.TrimPrefix(base, "."), "passkeys.v1.json")) ||
+		withinArchivePath(relative, stateDir+"/runtime") ||
 		withinArchivePath(relative, stateDir+"/imports") ||
 		withinArchivePath(relative, stateDir+"/locks") ||
 		withinArchivePath(relative, stateDir+"/secrets") ||

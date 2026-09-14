@@ -1,0 +1,23 @@
+.passkeys-panel { gap: 1.1rem; }
+.passkeys-security-hint { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.6; }
+.passkeys-empty { display: grid; justify-items: center; gap: .6rem; padding: 2rem 1rem; border: 1px dashed var(--border-color); border-radius: .75rem; text-align: center; }
+.passkeys-empty > svg { color: var(--muted); }
+.passkeys-empty p { margin: 0; color: var(--muted); font-size: .83rem; line-height: 1.5; }
+.passkeys-list { margin: 0; padding: 0; list-style: none; }
+.passkeys-list li { display: flex; align-items: center; gap: .85rem; padding: 1rem 0; border-bottom: 1px solid var(--border-color); }
+.passkeys-list li:first-child { padding-top: 0; }
+.passkey-icon { display: grid; place-items: center; flex-shrink: 0; width: 2.65rem; height: 2.65rem; border-radius: .7rem; color: var(--accent); background: var(--accent-soft); }
+.passkey-details { display: grid; gap: .3rem; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.passkey-details > span, .passkey-details > small { color: var(--muted); font-size: .78rem; line-height: 1.5; }
+.passkey-add { align-self: start; justify-self: start; }
+.passkey-confirm-form { display: grid; gap: 1rem; max-width: 32rem; padding: 1.25rem; border: 1px solid var(--border-color); border-radius: .75rem; background: var(--panel-raised); }
+.passkey-confirm-form h3, .passkey-confirm-form p { margin: 0; }
+.passkey-confirm-form p { font-size: .85rem; line-height: 1.6; overflow-wrap: anywhere; }
+.passkey-confirm-form > label { display: grid; gap: .5rem; font-size: .8rem; font-weight: 650; }
+.passkey-confirm-form > label input { width: 100%; }
+.passkey-form-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .6rem; }
+@media (max-width: 480px) {
+  .passkey-icon { display: none; }
+  .passkeys-list li { gap: .5rem; }
+  .passkey-confirm-form { padding: 1rem; }
+}

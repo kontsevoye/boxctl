@@ -862,6 +862,7 @@ type Services struct {
 	Credentials           CredentialService
 	AdminSetup            AdminSetupService
 	SessionSecrets        SessionSecretStore
+	Passkeys              PasskeyStore
 	Status                StatusService
 	Engines               EngineService
 	Settings              SettingsService

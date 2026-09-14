@@ -80,6 +80,7 @@ type Server struct {
 	publicOrigin        canonicalOrigin
 	mutationGate        chan struct{}
 	loginChecks         chan struct{}
+	passkeyCeremonies   passkeyCeremonies
 }
 
 type contextKey uint8
@@ -306,6 +307,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
 	s.mux.HandleFunc("/api/v1/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("/api/v1/auth/session", s.handleSession)
+	s.mux.HandleFunc("/api/v1/auth/passkeys/begin", s.handlePasskeyLoginBegin)
+	s.mux.HandleFunc("/api/v1/auth/passkeys/finish", s.handlePasskeyLoginFinish)
+	s.mux.HandleFunc("/api/v1/settings/passkeys", s.handlePasskeys)
+	s.mux.HandleFunc("/api/v1/settings/passkeys/register/begin", s.handlePasskeyRegistrationBegin)
+	s.mux.HandleFunc("/api/v1/settings/passkeys/register/finish", s.handlePasskeyRegistrationFinish)
 	s.mux.HandleFunc("/api/v1/status", s.handleStatus)
 	s.mux.HandleFunc("/api/v1/engines", s.handleEngines)
 	s.mux.HandleFunc("/api/v1/engines/", s.handleEngineRoute)
@@ -478,7 +484,8 @@ func (s *Server) expectedRequestOrigin(r *http.Request) (canonicalOrigin, bool) 
 }
 
 func isPublicAPIPath(path string) bool {
-	return path == "/api/v1/auth/login" || path == "/api/v1/setup"
+	return path == "/api/v1/auth/login" || path == "/api/v1/setup" ||
+		path == "/api/v1/auth/passkeys/begin" || path == "/api/v1/auth/passkeys/finish"
 }
 
 func (s *Server) withSessionExpiry(r *http.Request, claims sessionClaims) (*http.Request, context.CancelFunc) {
@@ -495,7 +502,8 @@ func serializeUnsafeRequest(r *http.Request) bool {
 	// gate inside their handlers. This keeps slow unauthenticated uploads from
 	// blocking mutations while still serializing credential verification with
 	// a provisional backup state.
-	return r.URL.Path != "/api/v1/auth/login" && r.URL.Path != "/api/v1/backups/import"
+	return r.URL.Path != "/api/v1/auth/login" && r.URL.Path != "/api/v1/backups/import" &&
+		r.URL.Path != "/api/v1/auth/passkeys/begin" && r.URL.Path != "/api/v1/auth/passkeys/finish"
 }
 
 func (s *Server) acquireMutation(ctx context.Context) bool {

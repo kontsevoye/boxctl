@@ -1,5 +1,6 @@
 .settings-section-tabs {
   display: flex;
+  flex-wrap: wrap;
   align-items: stretch;
   gap: .35rem;
   width: fit-content;

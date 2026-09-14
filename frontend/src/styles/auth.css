@@ -16,3 +16,5 @@
 .password-visibility-toggle:disabled { cursor: default; opacity: .5; }
 .password-field > small { font-size: .75rem; line-height: 1.45; }
 .login-card form > .du-btn { min-height: 2.85rem; }
+.login-card .passkey-sign-in { min-height: 2.85rem; margin-bottom: 1.25rem; }
+.login-card .passkey-support-hint { margin: .75rem 0 0; color: var(--muted); font-size: .75rem; line-height: 1.5; }
