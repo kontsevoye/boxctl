@@ -7,6 +7,8 @@ type Dictionary = Record<string, string>
 
 const dictionaries: Record<Locale, Dictionary> = {
   ru: {
+    checkUpdates: 'Проверить обновления',
+    checkingUpdates: 'Проверяем…',
     passkeys: "Пасскеи",
     signInWithPasskey: "Войти с пасскеем",
     passkeysHint: "Вход с помощью отпечатка пальца, распознавания лица или ключа безопасности.",
@@ -481,6 +483,8 @@ const dictionaries: Record<Locale, Dictionary> = {
     savedResponseRecovered: 'Ответ сохранения был прерван, но конфигурация уже находится на сервере. Проверьте состояние ядра.',
   },
   en: {
+    checkUpdates: 'Check for updates',
+    checkingUpdates: 'Checking…',
     passkeys: "Passkeys",
     signInWithPasskey: "Sign in with a passkey",
     passkeysHint: "Sign in with your fingerprint, face recognition, or a security key.",

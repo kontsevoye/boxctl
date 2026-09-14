@@ -1,21 +1,23 @@
-import { ArrowUpCircle, CheckCircle2, RefreshCw, RotateCcw } from 'lucide-react'
+import { ArrowUpCircle, CheckCircle2, RefreshCw, RotateCcw, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { APIError, request } from '../api'
 import { useQuery } from '../hooks'
 import { useI18n } from '../i18n'
+import { readSetting, writeSetting } from '../storage'
 import { boxctlUpdateURL, formatBoxctlVersion } from './BoxctlVersion'
 import { ErrorPanel, Loading } from './Common'
 import { useConfirm } from './ConfirmDialog'
 import type { ManagerUpdateJob, ManagerUpdateView } from '../types'
 
-export function ManagerUpdatePanel() {
+export function ManagerUpdatePanel({ visible = true }: { visible?: boolean }) {
   const { t } = useI18n()
   const confirm = useConfirm()
-  const query = useQuery<ManagerUpdateView>('/manager/update')
+  const query = useQuery<ManagerUpdateView>('/manager/update', visible)
   const [view, setView] = useState<ManagerUpdateView>()
   const [busy, setBusy] = useState('')
   const [uncertain, setUncertain] = useState(false)
   const [error, setError] = useState<APIError>()
+  const [completion, setCompletion] = useState<ManagerUpdateJob>()
   useEffect(() => {
     if (query.data) {
       setView((current) => mergeManagerUpdateView(current, query.data!))
@@ -26,10 +28,23 @@ export function ManagerUpdatePanel() {
   // Keep polling after a lost POST response and across a manager restart.
   // Reloading or leaving the page never cancels the durable server-side job.
   useEffect(() => {
+    if (!visible) return
     const timer = window.setInterval(query.reload, 2_000)
     return () => window.clearInterval(timer)
-  }, [query.reload])
+  }, [query.reload, visible])
   const job = view?.job
+  useEffect(() => {
+    if (!visible || job?.state !== 'succeeded') {
+      setCompletion(undefined)
+    } else if (claimManagerUpdateCompletion(job)) {
+      setCompletion(job)
+    }
+  }, [visible, job])
+  useEffect(() => {
+    if (!completion) return
+    const timer = window.setTimeout(() => setCompletion(undefined), 10_000)
+    return () => window.clearTimeout(timer)
+  }, [completion])
   const active = managerUpdatePending(job)
   const pending = busy !== '' || active || uncertain
   const check = async () => {
@@ -87,9 +102,10 @@ export function ManagerUpdatePanel() {
         <span>{t('boxctlFullRestartRequired')}</span>
         <button type="button" className="du-btn du-btn-warning du-btn-sm" disabled={pending} onClick={() => void install(true)}>{t('boxctlFullRestartUpdate')}</button>
       </div>}
-      {job?.state === 'succeeded' && <div className="update-complete" role="status">
-        <CheckCircle2 size={18} aria-hidden="true" /><span>{t('boxctlUpdated')}: {formatBoxctlVersion(job.currentVersion)}</span>
+      {completion && <div className="update-complete" role="status">
+        <CheckCircle2 size={18} aria-hidden="true" /><span>{t('boxctlUpdated')}: {formatBoxctlVersion(completion.currentVersion)}</span>
         <button type="button" className="du-btn du-btn-outline du-btn-sm" onClick={() => window.location.reload()}><RotateCcw size={15} aria-hidden="true" />{t('boxctlReloadUI')}</button>
+        <button type="button" className="du-btn du-btn-ghost du-btn-sm du-btn-square" aria-label={t('close')} onClick={() => setCompletion(undefined)}><X size={16} aria-hidden="true" /></button>
       </div>}
       {job?.state === 'failed' && <div className="du-alert du-alert-error" role="alert">{t(job.errorCode === 'worker_interrupted' ? 'boxctlUpdateInterrupted' : 'boxctlUpdateFailed')}</div>}
       {query.error && !active && !uncertain && <ErrorPanel error={query.error} onRetry={query.reload} />}
@@ -98,6 +114,24 @@ export function ManagerUpdatePanel() {
 }
 
 export function managerUpdatePending(job?: ManagerUpdateJob): boolean { return job?.state === 'queued' || job?.state === 'running' }
+
+let lastNotifiedJob = ''
+
+// The server retains its durable job for recovery/history. A success notice is
+// only useful shortly after completion and must not return on every page visit.
+export function claimManagerUpdateCompletion(job?: ManagerUpdateJob, now = Date.now()): boolean {
+  if (job?.state !== 'succeeded' || !job.id) return false
+  const age = now - Date.parse(job.updatedAt)
+  if (!Number.isFinite(age) || age < 0 || age > 5 * 60_000 || lastNotifiedJob === job.id) return false
+  try {
+    if (readSetting('managerUpdateNotifiedJob') === job.id) return false
+    writeSetting('managerUpdateNotifiedJob', job.id)
+  } catch {
+    // Storage can be unavailable; keep the notice one-shot for this document.
+  }
+  lastNotifiedJob = job.id
+  return true
+}
 
 export function mergeManagerUpdateView(current: ManagerUpdateView | undefined, next: ManagerUpdateView): ManagerUpdateView {
   // An in-flight poll from before POST must not erase its accepted job.

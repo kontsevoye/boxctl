@@ -309,7 +309,7 @@ export function SettingsPage() {
       <div id="settings-panel-panel" className="settings-tab-panel" role="tabpanel" aria-labelledby="settings-panel-tab" hidden={section !== 'panel'}><ManagementSettingsPanel active={section === 'panel'} /></div>
       {section === 'passkeys' && <div id="settings-passkeys-panel" className="settings-tab-panel" role="tabpanel" aria-labelledby="settings-passkeys-tab"><PasskeysPanel /></div>}
       <div id="settings-updates-panel" className="settings-tab-panel" role="tabpanel" aria-labelledby="settings-updates-tab" hidden={section !== 'updates'}>
-      <ManagerUpdatePanel />
+      <ManagerUpdatePanel visible={section === 'updates'} />
 		<div className="du-card panel settings-section">
 			<h2>{t('engineUpdates')}</h2>
         {engines.filter((engine) => engine.management.updates).map((engine) => <EngineUpdatePanel key={engine.id} engine={engine} capabilities={capabilities} refreshCapabilities={refreshCapabilities} onMessage={setMessage} onError={setError} />)}
@@ -365,7 +365,10 @@ function EngineUpdatePanel({ engine, capabilities, refreshCapabilities, onMessag
   return <div className="engine-update-row">
     <div className="title-row">
       <div><strong>{engine.displayName}</strong><small>{update.data?.currentVersion ?? engine.version ?? '—'} · {t('latestVersion')}: {update.data?.latestVersion ?? '—'}{update.data?.channel ? ` (${update.data.channel})` : ''}</small></div>
-      {update.data && <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={busy || !update.data.updateAvailable || !(canPerform(capabilities, 'updateEngine') || canPerform(capabilities, 'updateCore'))} onClick={() => void install()}>{busy ? t('updatingCore') : t(isCleanCoreInstall(update.data) ? 'installEngine' : 'installCoreUpdate')}</button>}
+      <div className="engine-update-actions">
+        <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={busy || update.loading} onClick={update.reload}><RefreshCw size={15} aria-hidden="true" className={update.loading ? 'spin-icon' : ''} />{t(update.loading ? 'checkingUpdates' : 'checkUpdates')}</button>
+        {update.data && <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={busy || update.loading || !update.data.updateAvailable || !(canPerform(capabilities, 'updateEngine') || canPerform(capabilities, 'updateCore'))} onClick={() => void install()}>{busy ? t('updatingCore') : t(isCleanCoreInstall(update.data) ? 'installEngine' : 'installCoreUpdate')}</button>}
+      </div>
     </div>
     {update.loading && !update.data && <Loading />}
     {update.error && <ErrorPanel error={update.error} onRetry={update.reload} />}

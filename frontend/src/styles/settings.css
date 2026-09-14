@@ -31,6 +31,7 @@
 .settings-tab-error { width: .4rem; height: .4rem; border-radius: 50%; background: var(--danger); }
 .settings-workspace .settings-form[hidden], .settings-tab-panel[hidden] { display: none; }
 .settings-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.engine-update-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
 .settings-tab-panel { display: grid; min-width: 0; gap: 1.25rem; }
 .settings-workspace .settings-section.panel { gap: 1.25rem; padding: 1.5rem; }
 .settings-workspace .settings-section-heading p { max-width: 52rem; }

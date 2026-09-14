@@ -1,3 +1,4 @@
+import { RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { APIError, request } from '../api'
 import { useQuery } from '../hooks'
@@ -66,7 +67,7 @@ export function ExternalDashboardPanel({ settings }: { settings?: Settings }) {
       </div>}
     </div>
     {status && <div className="settings-card-actions">
-        <button className="du-btn du-btn-ghost du-btn-sm" type="button" disabled={pending} onClick={() => void check()}>{t(busy === 'check' ? 'checkingDashboardUpdates' : 'checkDashboardUpdates')}</button>
+        <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={pending} onClick={() => void check()}><RefreshCw size={15} aria-hidden="true" className={busy === 'check' ? 'spin-icon' : ''} />{t(busy === 'check' ? 'checkingUpdates' : 'checkUpdates')}</button>
         <button className="du-btn du-btn-outline du-btn-sm" type="button" disabled={pending || (status.installed && status.latestVersion !== undefined && !status.updateAvailable && !status.updateCheckFailed)} onClick={() => void manage()}>
           {t(busy === 'install' ? (status.installed ? 'externalDashboardUpdating' : 'externalDashboardInstalling') : (status.installed ? 'externalDashboardUpdate' : 'externalDashboardInstall'))}
         </button>
