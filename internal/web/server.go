@@ -310,6 +310,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/engines", s.handleEngines)
 	s.mux.HandleFunc("/api/v1/engines/", s.handleEngineRoute)
 	s.mux.HandleFunc("/api/v1/settings", s.handleSettings)
+	s.mux.HandleFunc("/api/v1/settings/management", s.handleManagementSettings)
+	s.mux.HandleFunc("/api/v1/settings/management/apply", s.handleApplyManagementSettings)
 	s.mux.HandleFunc("/api/v1/config", s.handleConfig)
 	s.mux.HandleFunc("/api/v1/config/validate", s.handleConfigValidation)
 	s.mux.HandleFunc("/api/v1/profiles", s.handleProfiles)

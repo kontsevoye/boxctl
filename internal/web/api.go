@@ -865,6 +865,7 @@ type Services struct {
 	Status                StatusService
 	Engines               EngineService
 	Settings              SettingsService
+	ManagementSettings    ManagementSettingsService
 	Config                ConfigService
 	Profiles              ProfileService
 	ProxySubscriptions    ProxySubscriptionService

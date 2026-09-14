@@ -74,6 +74,10 @@
 .settings-workspace .settings-backups .page-header { display: none; }
 .settings-workspace .external-dashboard-settings { margin-bottom: 0; }
 .settings-workspace .settings-backups .backup-card { min-width: 0; }
+.panel-access-form { display: grid; gap: 1.25rem; min-width: 0; }
+.panel-access-apply { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+.panel-access-link { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; overflow-wrap: anywhere; }
+.panel-access-form input { width: 100%; min-width: 0; }
 
 @media (max-width: 640px) {
   .settings-section-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; margin-bottom: 1.1rem; }

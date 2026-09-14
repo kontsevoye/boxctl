@@ -298,6 +298,23 @@ uci commit boxctl
 service boxctl restart
 ```
 
+The same four options are available in **Settings → Panel**. The panel reads
+their current values from UCI, validates origins/host names and matching TLS
+certificate/key files, and commits changes to `boxctl.main`. Existing unrelated
+options are retained. A stale browser revision or external pending UCI changes
+blocks saving until the values are reloaded and external changes are finished.
+
+**Save** persists the configuration without restarting anything. The page shows
+whether saved values differ from the running process. **Apply and restart**
+confirms and schedules a full service/core restart in an independent procd
+worker, then reconnects or offers the configured public address. TLS fields are
+file paths on the router; certificate and private-key contents are never sent
+to the browser. These settings are not duplicated in the manager's JSON state.
+
+The authenticated API uses `GET/PUT /api/v1/settings/management` and
+`POST /api/v1/settings/management/apply`; writes and apply requests require the
+revision returned by GET. Both mutations also require the session CSRF token.
+
 ### Optional external dashboard
 
 Zashboard is not bundled with boxctl and its integration is disabled by

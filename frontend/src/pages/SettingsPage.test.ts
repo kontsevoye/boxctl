@@ -8,6 +8,7 @@ describe('settings section availability', () => {
     expect(settingsSectionFromSearch('?section=backups', true)).toBe('backups')
     expect(settingsSectionFromSearch('?section=updates', false)).toBe('updates')
     expect(settingsSectionFromSearch('?section=routing', false)).toBe('routing')
+    expect(settingsSectionFromSearch('?section=panel', false)).toBe('panel')
     expect(settingsSectionFromSearch('?section=unknown', true)).toBe('general')
     expect(settingsSectionFromSearch('', true)).toBe('general')
   })

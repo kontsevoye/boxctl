@@ -108,13 +108,14 @@ func NewActions(options ActionOptions) *Actions {
 }
 
 type serveBuildOptions struct {
-	NoCore       bool
-	NoGateway    bool
-	StartStopped bool
-	CookieSecure bool
-	AllowedHosts []string
-	PublicOrigin string
-	lockRoot     string
+	NoCore           bool
+	NoGateway        bool
+	StartStopped     bool
+	CookieSecure     bool
+	AllowedHosts     []string
+	PublicOrigin     string
+	ManagementConfig openwrt.ManagementConfig
+	lockRoot         string
 }
 
 type lifecycleOwner interface {
@@ -216,7 +217,11 @@ func (actions *Actions) Serve(ctx context.Context, options cli.ServeOptions) (re
 		NoCore: options.NoCore, NoGateway: options.NoGateway, StartStopped: options.StartStopped,
 		CookieSecure: tlsSettings.Enabled, AllowedHosts: allowedHosts,
 		PublicOrigin: strings.TrimSpace(actions.getenv("BOXCTL_PUBLIC_ORIGIN")),
-		lockRoot:     actions.openWrtLockRoot,
+		ManagementConfig: openwrt.ManagementConfig{
+			PublicOrigin: actions.getenv("BOXCTL_PUBLIC_ORIGIN"), AllowedHosts: actions.getenv("BOXCTL_ALLOWED_HOSTS"),
+			TLSCertificate: tlsSettings.Certificate, TLSKey: tlsSettings.Key,
+		},
+		lockRoot: actions.openWrtLockRoot,
 	}, actions.runner, logger, ring)
 	if err != nil {
 		return fmt.Errorf("initialize service: %w", err)
@@ -1207,6 +1212,11 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		services.ManagerUpdates = &ManagerWebUpdater{Service: updater, Checker: managerUpdates, Logger: logger}
 	}
 	services.SessionSecrets = credentials
+	if root == state.DefaultRoot {
+		services.ManagementSettings = &ManagementSettingsService{
+			UCI: openwrt.ManagementUCI{Runner: runner}, State: mihomoPreparer.State, Active: options.ManagementConfig,
+		}
+	}
 	services.AdminSetup = credentials
 	if restartGuard != nil {
 		services.Firewall = FirewallService{Lifecycle: lifecycle}

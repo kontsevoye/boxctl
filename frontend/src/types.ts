@@ -390,3 +390,17 @@ export interface LogEntry {
   message: string
   fields?: Record<string, unknown>
 }
+
+export interface ManagementConfig {
+  publicOrigin: string
+  allowedHosts: string
+  tlsCertificate: string
+  tlsKey: string
+}
+
+export interface ManagementSettings extends ManagementConfig {
+  supported: boolean
+  revision: string
+  pendingChanges: boolean
+  restartRequired: boolean
+}
