@@ -390,7 +390,7 @@ func buildMihomoPatches(patch MihomoPatch) ([]scalarPatch, []nestedPatch, error)
 		return nil, nil, fmt.Errorf("invalid TUN device %q", capture.TUNDevice)
 	}
 	switch capture.TUNStack {
-	case "system", "gvisor", "mixed":
+	case "system", "gvisor", "mixed", "mips":
 	default:
 		return nil, nil, fmt.Errorf("unsupported Mihomo TUN stack %q", capture.TUNStack)
 	}

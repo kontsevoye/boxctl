@@ -44,6 +44,19 @@ const requests = new Map();
 const streams = new Set();
 const sockets = new Set();
 const screenshots = [];
+const featureChecks = process.argv.includes("--features");
+const featureState = {
+  settings: structuredClone(fixture.settings),
+  engines: structuredClone(fixture.engines),
+  connections: structuredClone(fixture.connections),
+  saves: [],
+  closedIDs: [],
+};
+const emitConnections = () => {
+  for (const stream of streams)
+    if (stream.endpoint === "/core/connections/stream")
+      stream.response.write(`event: connections\ndata: ${JSON.stringify(featureState.connections)}\n\n`);
+};
 let browser;
 let vite;
 const dashboard = structuredClone(fixture.dashboard);
@@ -91,9 +104,9 @@ const api = createServer(async (req, res) => {
         expiresAt: "2027-01-01T00:00:00Z",
       });
     if (endpoint === "/core/capabilities") return json(fixture.capabilities);
-    if (endpoint === "/engines") return json(fixture.engines);
+    if (endpoint === "/engines") return json(featureState.engines);
     if (endpoint === "/status") return json(fixture.status);
-    if (endpoint === "/settings") return json(fixture.settings);
+    if (endpoint === "/settings") return json(featureState.settings);
     if (endpoint === "/profiles") return json(fixture.profiles);
     if (endpoint === "/proxy-subscriptions") return json(fixture.subscriptions);
     if (endpoint === "/core/rules") return json(fixture.rules);
@@ -140,7 +153,7 @@ const api = createServer(async (req, res) => {
     if (endpoint === "/core/dashboard/stream")
       return stream("dashboard", [dashboard]);
     if (endpoint === "/core/connections/stream")
-      return stream("connections", [fixture.connections]);
+      return stream("connections", [featureState.connections]);
     if (
       endpoint === "/core/logs/stream" ||
       endpoint === "/logs/system/stream"
@@ -168,6 +181,19 @@ const api = createServer(async (req, res) => {
         })),
       );
     }
+  }
+  if (featureChecks && method === "PUT" && endpoint === "/settings") {
+    const update = JSON.parse(body);
+    featureState.saves.push(update);
+    Object.assign(featureState.settings, update);
+    return json(featureState.settings);
+  }
+  if (featureChecks && method === "DELETE" && endpoint.startsWith("/core/connections")) {
+    const id = decodeURIComponent(endpoint.slice("/core/connections/".length));
+    featureState.closedIDs.push(id);
+    featureState.connections.active = featureState.connections.active.filter((connection) => endpoint === "/core/connections" ? false : connection.id !== id);
+    emitConnections();
+    return json({ closed: true });
   }
   if (
     method === "POST" &&
@@ -436,6 +462,11 @@ try {
   });
   await shot("updates", "/settings?section=updates", "Zashboard");
   await shot("backups", "/settings?section=backups", "Export");
+  let features;
+  if (featureChecks) {
+    const { checkPanelFeatures } = await import("./check-panel-features.mjs");
+    features = await checkPanelFeatures({ page, shot, clickText, assertText, pause, state: featureState, emitConnections });
+  }
   const gitRevision = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
@@ -459,6 +490,7 @@ try {
       unhandledAPIRequests: unknown,
       allScreenshotsWithoutHorizontalOverflow: true,
       engineCaptureModesMatchSource: true,
+      ...(features ? { features } : {}),
     },
     apiRequests: Object.fromEntries([...requests.entries()].sort()),
   };

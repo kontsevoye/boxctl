@@ -1227,6 +1227,7 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		return nil, err
 	}
 	settingsService.Lifecycle = lifecycle
+	settingsService.ValidateRuntimeSettings = mihomoPreparer.ValidateRuntimeSettings
 	if restartGuard != nil {
 		settingsService.ConfigureRestartGuard = restartGuard.Configure
 	}

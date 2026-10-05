@@ -22,6 +22,7 @@ import (
 const defaultMihomoControllerListen = "127.0.0.1:9090"
 
 var errMihomoBinaryNotInstalled = errors.New("mihomo binary is not installed")
+var errMihomoSettingsPreflightUnavailable = errors.New("native Mihomo settings check is unavailable")
 
 func tmpfsRuleProviderPath() string {
 	return filepath.Join(os.TempDir(), "boxctl-rule-providers")
@@ -94,6 +95,73 @@ func (preparer *ActiveMihomoPreparer) PrepareProfile(ctx context.Context, profil
 		return engine.PreparedCore{}, fmt.Errorf("%w: profile engine %q is not Mihomo", engine.ErrUnsupported, profile.Engine)
 	}
 	return preparer.prepareProfile(ctx, profile, nil, true)
+}
+
+// ValidateRuntimeSettings preflights managed capture settings using the native
+// config check. It never saves settings or publishes companion state, and does
+// not acquire the lifecycle gate; SettingsService already holds it.
+func (preparer *ActiveMihomoPreparer) ValidateRuntimeSettings(ctx context.Context, settings RuntimeSettings) error {
+	if preparer == nil || preparer.Config == nil {
+		return errors.New("mihomo preparer is not initialized")
+	}
+	active, activeErr := preparer.Profiles.Current()
+	if activeErr != nil && !errors.Is(activeErr, fs.ErrNotExist) {
+		return fmt.Errorf("read active profile: %w", activeErr)
+	}
+	if activeErr == nil && active.Engine != "" && active.Engine != state.EngineMihomo {
+		return fmt.Errorf("%w: active engine %q is not Mihomo", engine.ErrUnsupported, active.Engine)
+	}
+	sourcePath, err := preparer.sourcePath(active, activeErr)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: active Mihomo profile is not installed", errMihomoSettingsPreflightUnavailable)
+		}
+		return err
+	}
+	source, err := readBoundedRegular(sourcePath, 32<<20)
+	if err != nil {
+		return fmt.Errorf("read active Mihomo profile: %w", err)
+	}
+	managed, err := configpkg.InspectMihomo(source)
+	if err != nil {
+		return fmt.Errorf("inspect active Mihomo profile: %w", err)
+	}
+	managedSettings, err := managedRuntimeSettings(managed)
+	if err != nil {
+		return err
+	}
+	capture, err := settings.CapturePlan(managedSettings)
+	if err != nil {
+		return err
+	}
+	binaryPath, err := preparer.binaryPath()
+	if err != nil {
+		if errors.Is(err, errMihomoBinaryNotInstalled) || errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: Mihomo binary is not installed", errMihomoSettingsPreflightUnavailable)
+		}
+		return err
+	}
+	runtimeDir := preparer.RuntimeDir
+	if runtimeDir == "" {
+		runtimeDir = os.TempDir()
+	}
+	runtimeSource, err := preparer.injectProxySubscriptions(source)
+	if err != nil {
+		return err
+	}
+	// Use a stable source snapshot while the native checker runs. Runtime-only
+	// provider relocation and device headers do not affect TUN stack support.
+	driverSourcePath, err := writeConfigSnapshot(runtimeDir, "boxctl-mihomo-preflight-*.yaml", runtimeSource)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(driverSourcePath)
+	prepared, err := preparer.Config.Prepare(ctx, engine.PrepareRequest{
+		BinaryPath: binaryPath, SourceConfigPath: driverSourcePath, RuntimeDir: runtimeDir,
+		HomeDir: preparer.Layout.Root, Capture: capture, Controller: managedMihomoController(managed),
+	})
+	engine.CleanupPreparedRuntime(prepared)
+	return err
 }
 
 func (preparer *ActiveMihomoPreparer) prepareProfile(ctx context.Context, active state.ActiveProfile, activeErr error, explicit bool) (engine.PreparedCore, error) {

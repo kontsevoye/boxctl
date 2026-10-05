@@ -45,6 +45,7 @@ type RuntimeSettings struct {
 	ProxyTCPPorts                        []uint16
 	ProxyUDPPorts                        []uint16
 	RejectQUIC                           bool
+	BlockDoT                             bool
 	AutoDetectWAN                        bool
 	AutoDetectLAN                        bool
 	AutoFakeIP                           bool
@@ -161,7 +162,7 @@ func DecodeRuntimeSettings(raw state.Settings) (RuntimeSettings, error) {
 		result.TUNMTU = uint32(parsed)
 	}
 	switch result.TUNStack {
-	case "system", "gvisor", "mixed":
+	case "system", "gvisor", "mixed", "mips":
 	default:
 		return RuntimeSettings{}, fmt.Errorf("unsupported TUN_STACK %q", result.TUNStack)
 	}
@@ -187,23 +188,27 @@ func DecodeRuntimeSettings(raw state.Settings) (RuntimeSettings, error) {
 	}
 
 	for key, target := range map[string]*bool{
-		"EXTERNAL_DASHBOARD_ENABLED":                &result.ExternalDashboardEnabled,
-		"CORE_RESTART_GUARD":                        &result.CoreRestartGuard,
-		"BLOCK_QUIC":                                &result.RejectQUIC,
-		"AUTO_DETECT_WAN":                           &result.AutoDetectWAN,
-		"AUTO_DETECT_LAN":                           &result.AutoDetectLAN,
-		"AUTO_FAKEIP_WHITELIST":                     &result.AutoFakeIP,
+		"EXTERNAL_DASHBOARD_ENABLED": &result.ExternalDashboardEnabled,
+		"CORE_RESTART_GUARD":         &result.CoreRestartGuard,
+		"BLOCK_QUIC":                 &result.RejectQUIC,
+		"BLOCK_DOT":                  &result.BlockDoT,
+		"AUTO_DETECT_WAN":            &result.AutoDetectWAN,
+		"AUTO_DETECT_LAN":            &result.AutoDetectLAN,
+		"AUTO_FAKEIP_WHITELIST":      &result.AutoFakeIP,
 		"AUTO_FAKEIP_INCLUDE_EXTERNAL_IP_PROVIDERS": &result.AutoFakeIPIncludeExternalIPProviders,
-		"USE_TMPFS_RULES":                           &result.UseTmpfsRules,
-		"ENABLE_HWID":                               &result.EnableHWID,
-		"INTERCEPT_ROUTER_OUTPUT":                   &result.InterceptOutput,
-		"AUTO_REFRESH_PROXY_IPS":                    &result.AutoRefreshProxyIPs,
-		"AUTO_REFRESH_FAKEIP":                       &result.AutoRefreshFakeIP,
+		"USE_TMPFS_RULES":         &result.UseTmpfsRules,
+		"ENABLE_HWID":             &result.EnableHWID,
+		"INTERCEPT_ROUTER_OUTPUT": &result.InterceptOutput,
+		"AUTO_REFRESH_PROXY_IPS":  &result.AutoRefreshProxyIPs,
+		"AUTO_REFRESH_FAKEIP":     &result.AutoRefreshFakeIP,
 	} {
 		*target, err = settingBool(raw, key, *target)
 		if err != nil {
 			return RuntimeSettings{}, err
 		}
+	}
+	if result.BlockDoT && (result.OperatingMode != "gateway" || result.DNSMode == openwrt.DNSDisabled) {
+		return RuntimeSettings{}, errors.New("BLOCK_DOT requires gateway mode and DNS upstream or redirect")
 	}
 	result.MaintenanceInterval, err = settingInt(raw, "MAINTENANCE_INTERVAL", result.MaintenanceInterval, 5, 1440)
 	if err != nil {
@@ -345,7 +350,8 @@ func cloneSettings(settings state.Settings) state.Settings {
 }
 
 // CapturePlan translates the five capture modes into the engine-neutral core
-// contract. Native values discovered in the active profile win where safe.
+// contract. An explicit TUN_STACK setting overrides the profile; otherwise
+// native values discovered in the active profile win where safe.
 func (settings RuntimeSettings) CapturePlan(managed ManagedMihomoSettings) (engine.CapturePlan, error) {
 	tproxyPort := managed.TProxyPort
 	if tproxyPort == 0 {
@@ -364,7 +370,7 @@ func (settings RuntimeSettings) CapturePlan(managed ManagedMihomoSettings) (engi
 		device = "clash-tun"
 	}
 	stack := managed.TUNStack
-	if stack == "" {
+	if stack == "" || strings.TrimSpace(settings.Raw["TUN_STACK"]) != "" {
 		stack = settings.TUNStack
 	}
 	loopMark := managed.LoopMark
@@ -440,6 +446,7 @@ func (settings RuntimeSettings) GatewayPlan(capture engine.CapturePlan, discover
 	plan.LoopMark = capture.LoopMark
 	plan.InterceptOutput = settings.InterceptOutput
 	plan.RejectQUIC = settings.RejectQUIC
+	plan.BlockDoT = settings.BlockDoT
 	plan.BypassCIDRs = append([]string(nil), settings.ReservedNetworks...)
 	plan.BypassCIDRsConfigured = settings.ReservedNetworksConfigured
 	plan.SourceBypassCIDRs = append([]string(nil), settings.BypassSources...)

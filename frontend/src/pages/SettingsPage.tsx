@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { APIError, request, requestWithFallback } from '../api'
 import { useApp } from '../app-context'
 import { canPerform, canShowPage } from '../capabilities'
-import { ChoiceField } from '../components/ChoiceField'
+import { ChoiceField, type ChoiceOption } from '../components/ChoiceField'
 import { ErrorPanel, Loading, PageHeader } from '../components/Common'
 import { BoxctlVersion } from '../components/BoxctlVersion'
 import { Toast } from '../components/Toast'
@@ -23,6 +23,13 @@ import '../styles/settings.css'
 type PortListField = 'bypassTCPPorts' | 'bypassUDPPorts' | 'proxyOnlyTCPPorts' | 'proxyOnlyUDPPorts'
 type ListField = 'includedInterfaces' | 'excludedInterfaces' | 'reservedNetworks' | 'bypassSources' | PortListField
 export type PortListError = 'invalid' | 'too_many'
+
+export function tunStackOptions(engineID: string | undefined, savedStack?: Settings['tunStack']): ChoiceOption[] {
+  const options: ChoiceOption[] = ['system', 'gvisor', 'mixed'].map((value) => ({ value, label: value }))
+  if (engineID !== 'sing-box') options.push({ value: 'mips', label: 'mips' })
+  else if (savedStack === 'mips') options.push({ value: 'mips', label: 'mips (Mihomo)', disabled: true })
+  return options
+}
 
 const portListFields: PortListField[] = ['bypassTCPPorts', 'bypassUDPPorts', 'proxyOnlyTCPPorts', 'proxyOnlyUDPPorts']
 
@@ -146,6 +153,16 @@ export function SettingsPage() {
       setEngineChanged(true)
       return
     }
+    if (activeEngine?.id === 'sing-box' && form.tunStack === 'mips') {
+      selectSection('routing')
+      setError(new APIError(400, 'unsupported_tun_stack', t('tunStackSingBoxHint')))
+      return
+    }
+    if (form.blockDoT && (form.operatingMode === 'server' || form.dnsMode === 'disabled')) {
+      selectSection('routing')
+      setError(new APIError(400, 'invalid_settings', t('blockDoTRequiresDNS')))
+      return
+    }
     query.cancel()
     setBusy(true)
     try {
@@ -250,7 +267,7 @@ export function SettingsPage() {
           <ChoiceField label={t('interfaceMode')} value={form.interfaceMode ?? 'exclude'} options={['explicit', 'exclude'].map((value) => ({ value, label: value }))} onChange={(value) => update('interfaceMode', value as Settings['interfaceMode'])} />
           <label>{t('includedInterfaces')}<textarea className="du-textarea du-textarea-sm" rows={2} value={listText.includedInterfaces} onInput={(event) => updateList('includedInterfaces', event.currentTarget.value)} /><small>{t('commaListHint')}</small></label>
           <label>{t('excludedInterfaces')}<textarea className="du-textarea du-textarea-sm" rows={2} value={listText.excludedInterfaces} onInput={(event) => updateList('excludedInterfaces', event.currentTarget.value)} /><small>{t('commaListHint')}</small></label>
-          <ChoiceField label={t('tunStack')} value={form.tunStack ?? 'system'} options={['system', 'gvisor', 'mixed'].map((value) => ({ value, label: value }))} onChange={(value) => update('tunStack', value)} />
+          <ChoiceField label={t('tunStack')} value={form.tunStack ?? 'system'} options={tunStackOptions(activeEngine?.id, form.tunStack)} onChange={(value) => update('tunStack', value as Settings['tunStack'])} hint={t(activeEngine?.id === 'sing-box' ? 'tunStackSingBoxHint' : 'tunStackMihomoHint')} />
           {activeEngine?.id === 'sing-box' && <>
             <label>{t('tunAddress')}<input className="du-input du-input-sm" value={form.tunAddress ?? ''} onInput={(event) => update('tunAddress', event.currentTarget.value)} placeholder="172.19.0.1/30" /><small>{t('tunAddressHint')}</small></label>
 			<label>{t('tunMTU')}<input className="du-input du-input-sm" type="number" min={576} max={9000} value={form.tunMTU ?? 1500} onInput={(event) => update('tunMTU', event.currentTarget.valueAsNumber)} required /></label>
@@ -262,6 +279,7 @@ export function SettingsPage() {
           <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoDetectLAN ?? true} onChange={(event) => update('autoDetectLAN', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoDetectLAN')}</span><small>{t('autoDetectLANHint')}</small></span></label>
           <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.interceptRouterOutput ?? true} onChange={(event) => update('interceptRouterOutput', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('interceptRouterOutput')}</span><small>{t('interceptRouterOutputHint')}</small></span></label>
           <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.rejectQUIC ?? false} onChange={(event) => update('rejectQUIC', event.currentTarget.checked)} /><span>{t('rejectQUIC')}</span></label>
+          <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.blockDoT ?? false} disabled={!(form.blockDoT ?? false) && (form.operatingMode === 'server' || form.dnsMode === 'disabled')} onChange={(event) => update('blockDoT', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('blockDoT')}</span><small>{t('blockDoTHint')}</small></span></label>
 		  {activeEngine?.id !== 'sing-box' && <>
 			  <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoFakeIPWhitelist ?? false} onChange={(event) => update('autoFakeIPWhitelist', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoFakeIPWhitelist')}</span><small>{t('autoFakeIPWhitelistHint')}</small></span></label>
 			  <label className="toggle-row"><input className="du-toggle du-toggle-sm" type="checkbox" checked={form.autoFakeIPIncludeExternalIPProviders ?? false} onChange={(event) => update('autoFakeIPIncludeExternalIPProviders', event.currentTarget.checked)} /><span className="toggle-copy"><span>{t('autoFakeIPIncludeExternalIPProviders')}</span><small>{t('autoFakeIPIncludeExternalIPProvidersHint')}</small></span></label>
@@ -404,6 +422,7 @@ export function settingsUpdatePayload(form: Settings, listText: Record<ListField
     tunAddress: form.tunAddress,
     tunMTU: form.tunMTU,
     rejectQUIC: form.rejectQUIC ?? false,
+    blockDoT: form.blockDoT ?? false,
     autoFakeIPWhitelist: form.autoFakeIPWhitelist ?? false,
 		autoFakeIPIncludeExternalIPProviders: form.autoFakeIPIncludeExternalIPProviders ?? false,
 		useTmpfsRules: form.useTmpfsRules ?? false,

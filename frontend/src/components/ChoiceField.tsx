@@ -5,6 +5,7 @@ import { useI18n } from '../i18n'
 export interface ChoiceOption {
   value: string
   label: string
+  disabled?: boolean
 }
 
 export function ChoiceField({ label, value, options, onChange, hint, disabled = false }: {
@@ -18,7 +19,7 @@ export function ChoiceField({ label, value, options, onChange, hint, disabled = 
   const fieldID = useId()
   const groupRef = useRef<HTMLDivElement>(null)
   const unique = useMemo(() => uniqueOptions(options, value), [options, value])
-  const selectedIndex = Math.max(0, unique.findIndex((option) => option.value === value))
+  const selectedIndex = Math.max(0, unique.findIndex((option) => option.value === value && !option.disabled), unique.findIndex((option) => !option.disabled))
   if (unique.length <= 4) {
     return <fieldset className="choice-field" disabled={disabled}>
       <legend id={fieldID}>{label}</legend>
@@ -28,12 +29,13 @@ export function ChoiceField({ label, value, options, onChange, hint, disabled = 
           type="button"
           role="radio"
           aria-checked={option.value === value}
+          disabled={option.disabled}
           tabIndex={!disabled && index === selectedIndex ? 0 : -1}
           key={option.value}
           onClick={() => onChange(option.value)}
           onKeyDown={(event) => {
             if (event.altKey || event.ctrlKey || event.metaKey) return
-            const nextIndex = choiceIndexForKey(event.key, index, unique.length)
+            const nextIndex = choiceIndexForOptions(event.key, index, unique)
             if (nextIndex === null) return
             const next = unique[nextIndex]
             if (!next || disabled) return
@@ -78,6 +80,7 @@ function SearchableChoice({ label, value, options, onChange, hint, disabled }: {
   }
 
   const choose = (option: ChoiceOption) => {
+    if (option.disabled) return
     onChange(option.value)
     setQuery('')
     setOpen(false)
@@ -93,12 +96,12 @@ function SearchableChoice({ label, value, options, onChange, hint, disabled }: {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
       if (!open) openMenu()
-      else setActiveIndex((current) => choiceIndexForKey(event.key, current, matches.length) ?? 0)
+      else setActiveIndex((current) => choiceIndexForOptions(event.key, current, matches) ?? 0)
       return
     }
     if (open && (event.key === 'Home' || event.key === 'End')) {
       event.preventDefault()
-      setActiveIndex(choiceIndexForKey(event.key, activeIndex, matches.length) ?? 0)
+      setActiveIndex(choiceIndexForOptions(event.key, activeIndex, matches) ?? 0)
       return
     }
     if (event.key === 'Enter' && open) {
@@ -142,6 +145,7 @@ function SearchableChoice({ label, value, options, onChange, hint, disabled }: {
             role="option"
             tabIndex={-1}
             aria-selected={option.value === value}
+            disabled={option.disabled}
             key={option.value}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => choose(option)}
@@ -160,6 +164,21 @@ export function choiceIndexForKey(key: string, current: number, count: number): 
   if (key === 'End') return count - 1
   if (key === 'ArrowRight' || key === 'ArrowDown') return (current + 1) % count
   if (key === 'ArrowLeft' || key === 'ArrowUp') return (current - 1 + count) % count
+  return null
+}
+
+export function choiceIndexForOptions(key: string, current: number, options: ChoiceOption[]): number | null {
+  const selectable = options.flatMap((option, index) => option.disabled ? [] : [index])
+  if (selectable.length === 0) return null
+  if (key === 'Home') return selectable[0] ?? null
+  if (key === 'End') return selectable[selectable.length - 1] ?? null
+  const next = choiceIndexForKey(key, current, options.length)
+  if (next === null) return null
+  const direction = key === 'ArrowLeft' || key === 'ArrowUp' ? -1 : 1
+  for (let index = next, visited = 0; visited < options.length; index = (index + direction + options.length) % options.length, visited++) {
+    const option = options[index]
+    if (option && !option.disabled) return index
+  }
   return null
 }
 

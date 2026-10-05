@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { choiceIndexForKey, fuzzyMatch } from './ChoiceField'
+import { choiceIndexForKey, choiceIndexForOptions, fuzzyMatch } from './ChoiceField'
+
+describe('unavailable choices', () => {
+  it('skips disabled options in both directions and at either end', () => {
+    const options = [{ value: 'mips', label: 'mips', disabled: true }, { value: 'system', label: 'system' }, { value: 'mixed', label: 'mixed' }, { value: 'other', label: 'other', disabled: true }]
+    expect(choiceIndexForOptions('Home', 2, options)).toBe(1)
+    expect(choiceIndexForOptions('End', 1, options)).toBe(2)
+    expect(choiceIndexForOptions('ArrowLeft', 1, options)).toBe(2)
+    expect(choiceIndexForOptions('ArrowRight', 2, options)).toBe(1)
+    expect(choiceIndexForOptions('Tab', 1, options)).toBeNull()
+    expect(choiceIndexForOptions('ArrowRight', 0, options.map((option) => ({ ...option, disabled: true })))).toBeNull()
+  })
+})
 
 describe('choiceIndexForKey', () => {
   it('moves in both directions and wraps at either end of a radio group or list', () => {

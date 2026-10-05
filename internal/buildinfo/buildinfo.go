@@ -8,7 +8,9 @@ const (
 	// CaptureInjectorVersion changes when the nftables, policy-routing, DNS, or
 	// process-handoff contract changes in a way that requires rebuilding the
 	// live dataplane.
-	CaptureInjectorVersion = 1
+	// Version 2 adds LAN DoT policy and gives an explicitly saved TUN stack
+	// precedence over the native profile. Rebuild existing runtimes on upgrade.
+	CaptureInjectorVersion = 2
 )
 
 var (

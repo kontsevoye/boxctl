@@ -95,7 +95,7 @@ func TestVersionJSONIncludesCompatibilityVersions(t *testing.T) {
 	if err := Execute(context.Background(), []string{"version", "--json"}, Streams{Out: &output}, &actionRecorder{}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), `"settingsSchemaVersion":1`) || !strings.Contains(output.String(), `"captureInjectorVersion":1`) {
+	if !strings.Contains(output.String(), `"settingsSchemaVersion":1`) || !strings.Contains(output.String(), `"captureInjectorVersion":2`) {
 		t.Fatalf("version JSON = %s", output.String())
 	}
 	var version struct {

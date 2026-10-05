@@ -8,6 +8,7 @@ import { Empty, ErrorPanel, formatBytes, Loading, PageHeader } from '../componen
 import { useConfirm } from '../components/ConfirmDialog'
 import { useI18n } from '../i18n'
 import type { Connection, ConnectionStreamSnapshot } from '../types'
+import { VirtualConnectionTable } from './VirtualConnectionTable'
 import './connections.css'
 
 type StreamState = 'open' | 'reconnecting'
@@ -84,21 +85,23 @@ export function ConnectionsPage() {
     }
   }
 
-  const sourceConnections = selectConnectionRows(snapshot, tab)
+  const sourceConnections = useMemo(() => selectConnectionRows(snapshot, tab), [snapshot, tab])
   const devices = useMemo(() => connectionDevices([...snapshot.active, ...(snapshot.closed ?? [])], sourceFilter), [snapshot, sourceFilter])
   const pattern = useMemo(() => {
     if (!search.trim()) return undefined
     try { return new RegExp(search.trim(), 'i') } catch { return undefined }
   }, [search])
   const needle = search.trim().toLocaleLowerCase()
-  const filtered = sourceConnections
+  const filtered = useMemo(() => sourceConnections
     .filter(({ connection }) => {
       if (sourceFilter && connectionSourceIP(connection) !== sourceFilter.ip) return false
       if (!needle) return true
       const haystack = [displayConnectionHost(connection), connection.destination, connection.source, connection.sourceIP, connection.sourceHostname, connection.destinationIP, connection.dnsMode, connection.rule, connection.rulePayload, ...(connection.chains ?? [])].filter(Boolean).join(' ')
       return pattern ? pattern.test(haystack) : haystack.toLocaleLowerCase().includes(needle)
     })
-    .sort((left, right) => compareConnections(left.connection, right.connection, sortKey) * (descending ? -1 : 1))
+    .sort((left, right) => compareConnections(left.connection, right.connection, sortKey) * (descending ? -1 : 1)), [sourceConnections, sourceFilter, needle, pattern, sortKey, descending])
+  const filteredIDs = useMemo(() => filtered.map(({ connection }) => connection.id), [filtered])
+  const expandedIndex = filteredIDs.indexOf(expanded)
 
   const changeSort = (nextKey: SortKey) => {
     const next = nextConnectionSort(sortKey, descending, nextKey)
@@ -144,9 +147,9 @@ export function ConnectionsPage() {
         </label>
         <button className="proxies-icon-button connections-mobile-sort-direction" title={descending ? t('sortDescending') : t('sortAscending')} aria-label={descending ? t('sortDescending') : t('sortAscending')} onClick={() => setDescending((value) => !value)}>{descending ? <ArrowDown size={17} aria-hidden="true" /> : <ArrowUp size={17} aria-hidden="true" />}</button>
       </div>
+      <div className="connections-result-count" role="status">{t('connectionResults').replace('{shown}', String(filtered.length)).replace('{total}', String(sourceConnections.length))}</div>
       {filtered.length === 0 && <Empty>{sourceConnections.length > 0 ? t('noSearchResults') : t('noData')}</Empty>}
-      {filtered.length > 0 && <div className="table-wrap connections-table-wrap"><table className="du-table du-table-sm connections-table">
-        <thead><tr>
+      {filtered.length > 0 && <VirtualConnectionTable key={`${tab}/${search}/${sourceFilter?.ip ?? ''}/${sortKey}/${descending}`} ids={filteredIDs} label={t('connections')} columnCount={showCloseColumn ? 10 : 9} detailIndex={expandedIndex} header={<tr aria-rowindex={1}>
           <th className="connections-expand" />
           <SortableConnectionHeader label={t('host')} sortKey="host" activeKey={sortKey} descending={descending} onSort={changeSort} />
           <SortableConnectionHeader label={t('connectionType')} sortKey="type" activeKey={sortKey} descending={descending} onSort={changeSort} />
@@ -157,12 +160,12 @@ export function ConnectionsPage() {
           <SortableConnectionHeader label={t('downloadTotal')} sortKey="download" activeKey={sortKey} descending={descending} onSort={changeSort} numeric />
           <SortableConnectionHeader label={t('uploadTotal')} sortKey="upload" activeKey={sortKey} descending={descending} onSort={changeSort} numeric />
           {showCloseColumn && <th className="connections-action" />}
-        </tr></thead>
-        {filtered.map(({ connection, closed }) => {
+        </tr>} renderRow={(index, measure) => {
+          const { connection, closed } = filtered[index]!
           const chains = displayConnectionChains(connection)
           const isExpanded = expanded === connection.id
-          return <tbody key={connection.id} className={closed ? 'connection-closed' : undefined}>
-            <tr className={showCloseColumn && !closed ? 'connections-card-row has-close-action' : 'connections-card-row'}>
+          return <tbody ref={measure} data-index={index} data-connection-id={connection.id} key={connection.id} className={closed ? 'connection-closed' : undefined}>
+            <tr aria-rowindex={index + 2 + (expandedIndex >= 0 && index > expandedIndex ? 1 : 0)} className={showCloseColumn && !closed ? 'connections-card-row has-close-action' : 'connections-card-row'}>
               <td className="connections-expand"><button onClick={() => setExpanded(isExpanded ? '' : connection.id)} title={t('details')} aria-label={`${t('details')}: ${displayConnectionHost(connection)}`} aria-expanded={isExpanded} aria-controls={`connection-details-${encodeURIComponent(connection.id)}`}>{isExpanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}</button></td>
               <td className="connections-host"><strong>{displayConnectionHost(connection)}</strong>{closed && tab === 'all' && <span className="connection-closed-label">{t('connectionClosed')}</span>}{connection.host && connection.destination && displayConnectionHost(connection) !== connection.destination && <small>{connection.destination}</small>}{(connection.source || connection.sourceIP || connection.sourceHostname) && <small>{t('sourceAddress')}: {displayConnectionSource(connection)}</small>}</td>
               <td data-label={t('connectionType')}><strong>{connectionType(connection)}</strong>{connection.dnsMode && <small>{connection.dnsMode}</small>}</td>
@@ -171,12 +174,11 @@ export function ConnectionsPage() {
               <td className="connections-number" data-label={t('downloadRate')}><span>{formatRate(connection.downloadRateBytes)}</span></td><td className="connections-number" data-label={t('uploadRate')}><span>{formatRate(connection.uploadRateBytes)}</span></td><td className="connections-number" data-label={t('downloadTotal')}><span>{formatBytes(connection.downloadBytes)}</span></td><td className="connections-number" data-label={t('uploadTotal')}><span>{formatBytes(connection.uploadBytes)}</span></td>
               {showCloseColumn && <td className="connections-action">{!closed && <button className="connections-close-one" disabled={busy !== ''} onClick={() => close(connection)} title={t('close')} aria-label={t('close')}><X size={16} aria-hidden="true" /></button>}</td>}
             </tr>
-            {isExpanded && <tr className="connections-details-row" id={`connection-details-${encodeURIComponent(connection.id)}`}><td colSpan={showCloseColumn ? 10 : 9}><dl>
+            {isExpanded && <tr aria-rowindex={index + 3} className="connections-details-row" id={`connection-details-${encodeURIComponent(connection.id)}`}><td colSpan={showCloseColumn ? 10 : 9}><dl>
               <div><dt>ID</dt><dd><code>{connection.id}</code></dd></div><div><dt>{t('sourceAddress')}</dt><dd>{displayConnectionSource(connection)}</dd></div><div><dt>{t('destination')}</dt><dd>{displayConnectionEndpoint(connection.destinationIP, connection.destinationPort, connection.destination)}</dd></div><div><dt>{t('dnsMode')}</dt><dd>{connection.dnsMode ?? '—'}</dd></div><div><dt>{t('started')}</dt><dd>{formatTimestamp(connection.startedAt, locale)}</dd></div>{connection.closedAt && <div><dt>{t('closedAt')}</dt><dd>{formatTimestamp(connection.closedAt, locale)}</dd></div>}
             </dl></td></tr>}
           </tbody>
-        })}
-      </table></div>}
+        }} />}
     </>}
   </>
 }

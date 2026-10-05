@@ -106,6 +106,32 @@ panels that depend on providers, hot reload, or mutable routing mode remain
 unsupported. Remote sing-box profile refreshes are staged as pending changes
 and never restart the core in the background.
 
+The Settings page offers `system`, `gvisor`, `mixed`, and Mihomo-only `mips`
+TUN stacks. [`mips` requires Mihomo v1.19.31 or newer](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.31).
+The default remains `system`. An explicitly saved stack overrides the native
+profile's `tun.stack` in the private runtime copy; without a saved setting,
+the profile's stack is preserved. This applies to TUN, mixed, and mixed2 modes.
+The capture compatibility version is incremented for this precedence change;
+upgrading from the earlier contract requires a full core/dataplane restart.
+Changes to the selected stack and changes entering a TUN mode are validated
+against the installed Mihomo before saving or stopping the running core.
+Before the core/profile is installed, settings can be saved and native
+validation happens on the next start. sing-box
+rejects `mips` and offers its three supported stacks instead.
+
+Settings also offers optional **Block DoT** (off by default). With gateway mode
+and DNS upstream/redirect enabled, it drops LAN IPv4 TCP/UDP traffic to port 853
+before transparent interception. Interface exclusions and source bypasses are
+preserved; destination capture lists and port exceptions do not disable this
+DNS policy. Router-originated traffic is unaffected. Saving restarts a running
+core, or applies the setting on its next start. This does not block DoH on 443.
+
+The Connections page virtualizes desktop rows and mobile cards, including
+expanded details. Filtering and sorting still operate on the full data set;
+the count shows matching connections out of the selected tab's total. Live
+updates preserve the visible connection, and panel search finds offscreen
+connections. The browser's built-in Find searches only mounted rows.
+
 Connections enrich private LAN source addresses from OpenWrt/Entware host and
 lease data (`/etc/hosts`, `/opt/etc/hosts`, `/tmp/hosts/*`, and
 `/tmp/dhcp.leases`). Missing private addresses receive a bounded, cached PTR
@@ -173,8 +199,10 @@ a clean OpenWrt VM. It checks engine-tagged profile selection, live
 Mihomo-to-sing-box-to-Mihomo cutover, exact process/listener identity, the
 `procd` lifecycle, repeated Mihomo API hot reload and subsequent adoption
 without replacing the core process, real `nftables` and policy-routing rules,
-TPROXY traffic through both engines, a direct neighbouring Mihomo flow, and
-shutdown cleanup:
+TPROXY traffic through both engines, a direct neighbouring Mihomo flow,
+LAN DoT TCP/UDP blocking with source bypass and router-output controls,
+Mihomo `mips` TUN traffic, and shutdown cleanup. Supply Mihomo v1.19.31 or newer
+and a supported sing-box 1.14.x Linux ARM64 build compatible with OpenWrt musl:
 
 ```sh
 nix develop --command tests/integration/run.sh \

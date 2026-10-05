@@ -119,6 +119,11 @@ func (d *SingBoxDriver) Prepare(ctx context.Context, request PrepareRequest) (Pr
 		if request.Capture.TUNStack == "" {
 			request.Capture.TUNStack = "system"
 		}
+		switch request.Capture.TUNStack {
+		case "system", "gvisor", "mixed":
+		default:
+			return PreparedCore{}, fmt.Errorf("%w: sing-box TUN stack %q; choose system, gvisor or mixed (mips requires Mihomo)", ErrUnsupported, request.Capture.TUNStack)
+		}
 		if len(request.Capture.TUNAddresses) == 0 {
 			request.Capture.TUNAddresses = []netip.Prefix{netip.MustParsePrefix(SingBoxDefaultTUNAddress)}
 		}

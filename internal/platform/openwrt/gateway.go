@@ -112,6 +112,7 @@ type GatewayPlan struct {
 	ProxyOnlyUDPPorts     []uint16
 	InterceptOutput       bool
 	RejectQUIC            bool
+	BlockDoT              bool `json:",omitempty"`
 }
 
 // DefaultGatewayPlan returns a complete plan with boxctl's ports and
@@ -273,6 +274,9 @@ func Validate(plan GatewayPlan) error {
 	default:
 		return fmt.Errorf("openwrt: unsupported DNS mode %q", plan.DNSMode)
 	}
+	if plan.BlockDoT && plan.DNSMode == DNSDisabled {
+		return errors.New("openwrt: DoT blocking requires DNS upstream or redirect")
+	}
 	if !nftIdentifier.MatchString(plan.Table) {
 		return fmt.Errorf("openwrt: unsafe nft table name %q", plan.Table)
 	}
@@ -363,6 +367,22 @@ func Render(plan GatewayPlan) (string, error) {
 	renderAddressSet(&b, "source_bypass4", plan.SourceBypassCIDRs)
 	renderAddressSet(&b, "proxy_servers4", plan.ProxyServerCIDRs)
 	renderUIDSet(&b, plan.BypassUIDs)
+	if plan.BlockDoT {
+		// Filter before DNS DNAT and transparent capture. Destination allowlists,
+		// reserved networks and port filters must not defeat LAN DNS policy.
+		b.WriteString("\tchain dot_block {\n")
+		b.WriteString("\t\ttype filter hook prerouting priority -160; policy accept;\n")
+		fmt.Fprintf(&b, "\t\tmeta mark 0x%08x return\n", plan.LoopMark)
+		b.WriteString("\t\tmeta mark & 0x0000ff00 != 0x00000000 return\n")
+		b.WriteString("\t\tfib daddr type local return\n")
+		renderInterfaceBypass(&b, plan, "iifname")
+		if len(plan.SourceBypassCIDRs) > 0 {
+			b.WriteString("\t\tip saddr @source_bypass4 return\n")
+		}
+		b.WriteString("\t\tmeta nfproto ipv4 tcp dport 853 drop\n")
+		b.WriteString("\t\tmeta nfproto ipv4 udp dport 853 drop\n")
+		b.WriteString("\t}\n\n")
+	}
 
 	// "mark" is a reserved token in current nftables (including OpenWrt
 	// 25.12).  Using it as an unquoted chain name passes the in-memory golden

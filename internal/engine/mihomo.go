@@ -283,6 +283,9 @@ func (d *MihomoDriver) Validate(ctx context.Context, prepared PreparedCore) erro
 	args := []string{"-t", "-d", prepared.HomeDir, "-f", prepared.RuntimeConfigPath}
 	output, err := runCommandGroup(ctx, prepared.BinaryPath, args, prepared.Env)
 	if err != nil {
+		if prepared.Capture.TUNStack == "mips" {
+			return fmt.Errorf("mihomo config validation failed with TUN stack mips (requires Mihomo v1.19.31 or newer; update the core or choose another stack): %w: %s", err, strings.TrimSpace(output))
+		}
 		return fmt.Errorf("mihomo config validation failed: %w: %s", err, strings.TrimSpace(output))
 	}
 	return nil

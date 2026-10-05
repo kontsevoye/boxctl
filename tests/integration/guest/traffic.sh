@@ -6,6 +6,8 @@ umask 077
 output=$1
 manager_pid=$2
 core_pid=$3
+capture_type=${BOXCTL_TRAFFIC_CAPTURE_TYPE:-TProxy}
+case "$capture_type" in TProxy|Tun) ;; *) exit 2 ;; esac
 captured_ip=9.9.9.10
 direct_ip=9.9.9.11
 client_namespace=boxctl-client
@@ -120,7 +122,7 @@ while [ "$iteration" -le 7 ]; do
 	sample_pair "load-${iteration}"
 	connections="${output}/connections-${iteration}.json"
 	if curl --fail --silent --max-time 5 http://127.0.0.1:9090/connections >"$connections"; then
-		jq -e --arg source '192.168.111.100' --arg destination "$captured_ip" --arg port '5210' 'any(.connections[]?; .metadata.sourceIP == $source and .metadata.destinationIP == $destination and .metadata.destinationPort == $port and .metadata.type == "TProxy" and .metadata.network == "tcp")' "$connections" >/dev/null && tproxy_observed=true || true
+		jq -e --arg source '192.168.111.100' --arg destination "$captured_ip" --arg port '5210' --arg captureType "$capture_type" 'any(.connections[]?; .metadata.sourceIP == $source and .metadata.destinationIP == $destination and .metadata.destinationPort == $port and .metadata.type == $captureType and .metadata.network == "tcp")' "$connections" >/dev/null && tproxy_observed=true || true
 		jq -e --arg source '192.168.111.100' --arg destination "$direct_ip" --arg port '5211' 'any(.connections[]?; .metadata.sourceIP == $source and .metadata.destinationIP == $destination and .metadata.destinationPort == $port and .metadata.network == "tcp")' "$connections" >/dev/null && direct_observed=true || true
 	fi
 	iteration=$((iteration + 1))
