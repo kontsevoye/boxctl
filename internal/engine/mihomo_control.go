@@ -37,9 +37,10 @@ type MihomoLog struct {
 // MihomoController is a context-aware client for the Mihomo external
 // controller. It is safe for concurrent use.
 type MihomoController struct {
-	baseURL string
-	secret  string
-	client  *http.Client
+	baseURL        string
+	secret         string
+	client         *http.Client
+	proxyProviders bool
 }
 
 func NewMihomoController(endpoint ControllerEndpoint, client *http.Client) (*MihomoController, error) {
@@ -57,7 +58,7 @@ func NewMihomoController(endpoint ControllerEndpoint, client *http.Client) (*Mih
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	}
-	return &MihomoController{baseURL: base, secret: endpoint.Secret, client: client}, nil
+	return &MihomoController{baseURL: base, secret: endpoint.Secret, client: client, proxyProviders: true}, nil
 }
 
 func (c *MihomoController) Version(ctx context.Context) (string, error) {
@@ -133,6 +134,29 @@ func (c *MihomoController) Groups(ctx context.Context) ([]ProxyGroup, error) {
 	for _, proxy := range proxies {
 		proxiesByName[proxy.Name] = proxy
 	}
+	// Provider nodes appear in group membership but are absent from /proxies.
+	// Only read providers when group members need enrichment; sing-box's Clash
+	// API has no providers and must keep using its ordinary proxy namespace.
+	missing := false
+	for _, proxy := range proxies {
+		for _, name := range proxy.All {
+			if _, ok := proxiesByName[name]; !ok {
+				missing = true
+			}
+		}
+	}
+	if missing && c.proxyProviders {
+		providerProxies, err := c.providerProxies(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for name, options := range providerProxies {
+			// Do not guess which provider owns an ambiguous group member.
+			if _, exists := proxiesByName[name]; !exists && len(options) == 1 {
+				proxiesByName[name] = options[0]
+			}
+		}
+	}
 	groups := make([]ProxyGroup, 0)
 	for _, proxy := range proxies {
 		if len(proxy.All) == 0 && !knownGroupType(proxy.Type) {
@@ -180,7 +204,7 @@ func (c *MihomoController) Select(ctx context.Context, group, proxy string) erro
 	return c.doJSON(ctx, http.MethodPut, "/proxies/"+url.PathEscape(group), nil, payload, nil, http.StatusOK, http.StatusNoContent)
 }
 
-func (c *MihomoController) Delay(ctx context.Context, proxy, testURL string, timeout time.Duration) (time.Duration, error) {
+func (c *MihomoController) Delay(ctx context.Context, proxy, provider, testURL string, timeout time.Duration) (time.Duration, error) {
 	if proxy == "" || testURL == "" {
 		return 0, errors.New("proxy name and test URL are required")
 	}
@@ -198,13 +222,92 @@ func (c *MihomoController) Delay(ctx context.Context, proxy, testURL string, tim
 	var response struct {
 		Delay int64 `json:"delay"`
 	}
-	if err := c.doJSON(ctx, http.MethodGet, "/proxies/"+url.PathEscape(proxy)+"/delay", query, nil, &response, http.StatusOK); err != nil {
-		return 0, err
+	path := "/proxies/" + url.PathEscape(proxy) + "/delay"
+	if provider != "" {
+		path = "/providers/proxies/" + url.PathEscape(provider) + "/" + url.PathEscape(proxy) + "/healthcheck"
+	}
+	err := c.doJSON(ctx, http.MethodGet, path, query, nil, &response, http.StatusOK)
+	var controllerError *ControllerHTTPError
+	// Keep name-only clients compatible, but only resolve after a real 404.
+	// Never retry timeouts or pick the first of several matching providers.
+	if provider == "" && c.proxyProviders && errors.As(err, &controllerError) && controllerError.StatusCode == http.StatusNotFound {
+		proxies, lookupErr := c.providerProxies(ctx)
+		if lookupErr != nil {
+			return 0, classifyDelayError(lookupErr)
+		}
+		matches := proxies[proxy]
+		if len(matches) > 1 {
+			return 0, ErrProxyAmbiguous
+		}
+		if len(matches) == 1 {
+			path = "/providers/proxies/" + url.PathEscape(matches[0].Provider) + "/" + url.PathEscape(proxy) + "/healthcheck"
+			err = c.doJSON(ctx, http.MethodGet, path, query, nil, &response, http.StatusOK)
+		}
+	}
+	if err != nil {
+		return 0, classifyDelayError(err)
 	}
 	if response.Delay < 0 {
-		return 0, errors.New("mihomo returned a negative delay")
+		return 0, errors.Join(ErrDelayFailed, errors.New("mihomo returned a negative delay"))
 	}
 	return time.Duration(response.Delay) * time.Millisecond, nil
+}
+
+// providerProxies keeps provider identity and node metadata together. Names
+// alone are not unique across subscription providers.
+func (c *MihomoController) providerProxies(ctx context.Context) (map[string][]Proxy, error) {
+	var response struct {
+		Providers map[string]struct {
+			Proxies []struct {
+				Name    string        `json:"name"`
+				Type    string        `json:"type"`
+				Icon    string        `json:"icon"`
+				UDP     bool          `json:"udp"`
+				Alive   *bool         `json:"alive"`
+				History []DelaySample `json:"history"`
+			} `json:"proxies"`
+		} `json:"providers"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/providers/proxies", nil, nil, &response, http.StatusOK); err != nil {
+		return nil, err
+	}
+	result := make(map[string][]Proxy)
+	for provider, data := range response.Providers {
+		for _, node := range data.Proxies {
+			result[node.Name] = append(result[node.Name], Proxy{Name: node.Name, Provider: provider, Type: node.Type, Icon: node.Icon, UDP: node.UDP, Alive: node.Alive, History: node.History})
+		}
+	}
+	return result, nil
+}
+
+// ControllerHTTPError retains the upstream status for safe public error mapping.
+// Detail is for server diagnostics only; it must not be serialized to clients.
+type ControllerHTTPError struct {
+	StatusCode           int
+	method, path, detail string
+}
+
+func (err *ControllerHTTPError) Error() string {
+	return fmt.Sprintf("mihomo controller %s %s returned %d: %s", err.method, err.path, err.StatusCode, err.detail)
+}
+func classifyDelayError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	var timeout interface{ Timeout() bool }
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+		return errors.Join(ErrDelayTimeout, err)
+	}
+	var upstream *ControllerHTTPError
+	if errors.As(err, &upstream) {
+		switch upstream.StatusCode {
+		case http.StatusNotFound:
+			return errors.Join(ErrProxyNotFound, err)
+		case http.StatusGatewayTimeout:
+			return errors.Join(ErrDelayTimeout, err)
+		}
+	}
+	return errors.Join(ErrDelayFailed, err)
 }
 
 func (c *MihomoController) Providers(ctx context.Context, kind ProviderKind) ([]Provider, error) {
@@ -592,7 +695,7 @@ func (c *MihomoController) doJSON(ctx context.Context, method, path string, quer
 		if detail == "" {
 			detail = http.StatusText(response.StatusCode)
 		}
-		return fmt.Errorf("mihomo controller %s %s returned %d: %s", method, path, response.StatusCode, detail)
+		return &ControllerHTTPError{StatusCode: response.StatusCode, method: method, path: path, detail: detail}
 	}
 	if responseBody != nil {
 		if len(bytes.TrimSpace(data)) == 0 {

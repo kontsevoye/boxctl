@@ -690,13 +690,14 @@ type ProxyGroup struct {
 }
 
 type ProxyOption struct {
-	Name    string        `json:"name"`
-	Type    string        `json:"type,omitempty"`
-	Icon    string        `json:"icon,omitempty"`
-	UDP     bool          `json:"udp,omitempty"`
-	DelayMS *int64        `json:"delayMs,omitempty"`
-	Alive   *bool         `json:"alive,omitempty"`
-	History []DelaySample `json:"history,omitempty"`
+	Provider string        `json:"provider,omitempty"`
+	Name     string        `json:"name"`
+	Type     string        `json:"type,omitempty"`
+	Icon     string        `json:"icon,omitempty"`
+	UDP      bool          `json:"udp,omitempty"`
+	DelayMS  *int64        `json:"delayMs,omitempty"`
+	Alive    *bool         `json:"alive,omitempty"`
+	History  []DelaySample `json:"history,omitempty"`
 }
 
 type DelaySample struct {
@@ -708,8 +709,9 @@ type DelaySample struct {
 // The test URL is intentionally not echoed because it may contain sensitive
 // query parameters.
 type ProxyDelayResult struct {
-	Proxy   string `json:"proxy"`
-	DelayMS int64  `json:"delayMs"`
+	Provider string `json:"provider,omitempty"`
+	Proxy    string `json:"proxy"`
+	DelayMS  int64  `json:"delayMs"`
 }
 
 // ProviderKind is a backend-neutral provider category exposed by the API.
@@ -829,7 +831,7 @@ type CoreService interface {
 	SetRoutingMode(ctx context.Context, mode string) error
 	ProxyGroups(ctx context.Context) ([]ProxyGroup, error)
 	SelectProxy(ctx context.Context, group, proxy string) error
-	TestProxyDelay(ctx context.Context, proxy, testURL string, timeout time.Duration) (ProxyDelayResult, error)
+	TestProxyDelay(ctx context.Context, proxy, provider, testURL string, timeout time.Duration) (ProxyDelayResult, error)
 	Providers(ctx context.Context, kind ProviderKind) ([]Provider, error)
 	UpdateProvider(ctx context.Context, kind ProviderKind, name string) error
 	Connections(ctx context.Context) ([]Connection, error)

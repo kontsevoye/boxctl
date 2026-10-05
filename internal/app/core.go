@@ -542,7 +542,7 @@ func (service *CoreService) ProxyGroups(ctx context.Context) ([]web.ProxyGroup, 
 		for _, member := range group.Members {
 			option := optionMetadata[member]
 			options = append(options, web.ProxyOption{
-				Name: member, Type: option.Type, Icon: safeProxyIcon(option.Icon), UDP: option.UDP, DelayMS: latestProxyDelay(option.History), Alive: option.Alive,
+				Name: member, Provider: option.Provider, Type: option.Type, Icon: safeProxyIcon(option.Icon), UDP: option.UDP, DelayMS: latestProxyDelay(option.History), Alive: option.Alive,
 				History: webDelayHistory(option.History),
 			})
 		}
@@ -600,19 +600,19 @@ func (service *CoreService) SelectProxy(ctx context.Context, group, proxy string
 	return nil
 }
 
-func (service *CoreService) TestProxyDelay(ctx context.Context, proxy, testURL string, timeout time.Duration) (web.ProxyDelayResult, error) {
+func (service *CoreService) TestProxyDelay(ctx context.Context, proxy, provider, testURL string, timeout time.Duration) (web.ProxyDelayResult, error) {
 	if err := service.available(ctx); err != nil {
 		return web.ProxyDelayResult{}, err
 	}
 	if !service.core.Capabilities().Delay {
 		return web.ProxyDelayResult{}, unsupportedCore("proxy delay tests")
 	}
-	delay, err := service.core.Delay(ctx, proxy, testURL, timeout)
+	delay, err := service.core.Delay(ctx, proxy, provider, testURL, timeout)
 	if err != nil {
 		return web.ProxyDelayResult{}, translateCoreError(err)
 	}
 	service.invalidateDashboard()
-	return web.ProxyDelayResult{Proxy: proxy, DelayMS: delay.Milliseconds()}, nil
+	return web.ProxyDelayResult{Proxy: proxy, Provider: provider, DelayMS: delay.Milliseconds()}, nil
 }
 
 func (service *CoreService) Providers(ctx context.Context, kind web.ProviderKind) ([]web.Provider, error) {
@@ -1161,6 +1161,14 @@ func translateCoreError(err error) error {
 		return nil
 	}
 	switch {
+	case errors.Is(err, engine.ErrProxyNotFound):
+		return errors.Join(err, &web.PublicError{Status: 404, Code: "proxy_not_found", Message: "Proxy was not found; refresh the proxy list"})
+	case errors.Is(err, engine.ErrProxyAmbiguous):
+		return errors.Join(err, &web.PublicError{Status: 409, Code: "ambiguous_proxy", Message: "Proxy name belongs to multiple providers; specify the provider"})
+	case errors.Is(err, engine.ErrDelayTimeout):
+		return errors.Join(err, &web.PublicError{Status: 504, Code: "delay_timeout", Message: "Proxy delay test timed out"})
+	case errors.Is(err, engine.ErrDelayFailed):
+		return errors.Join(err, &web.PublicError{Status: 502, Code: "delay_failed", Message: "Proxy delay test failed"})
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
 	case errors.Is(err, engine.ErrUnsupported):

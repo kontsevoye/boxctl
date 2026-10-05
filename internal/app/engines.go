@@ -361,12 +361,12 @@ func (host *EngineHost) Select(ctx context.Context, group, proxy string) error {
 	}
 	return backend.Select(ctx, group, proxy)
 }
-func (host *EngineHost) Delay(ctx context.Context, proxy, testURL string, timeout time.Duration) (time.Duration, error) {
+func (host *EngineHost) Delay(ctx context.Context, proxy, provider, testURL string, timeout time.Duration) (time.Duration, error) {
 	backend, err := host.control()
 	if err != nil {
 		return 0, err
 	}
-	return backend.Delay(ctx, proxy, testURL, timeout)
+	return backend.Delay(ctx, proxy, provider, testURL, timeout)
 }
 func (host *EngineHost) Providers(ctx context.Context, kind engine.ProviderKind) ([]engine.Provider, error) {
 	backend, err := host.control()

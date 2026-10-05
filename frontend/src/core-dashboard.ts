@@ -65,7 +65,8 @@ function validProxyGroup(value: unknown): value is ProxyGroup {
 
 function validProxyOption(value: unknown): value is ProxyOption {
   if (!isRecord(value) || typeof value.name !== 'string') return false
-  return optionalString(value.type)
+  return optionalString(value.provider)
+    && optionalString(value.type)
     && optionalString(value.icon)
     && optionalBoolean(value.udp)
     && optionalFiniteNumber(value.delayMs)

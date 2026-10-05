@@ -525,6 +525,7 @@ func TestCoreDelayAndProviderEndpointsAreValidatedAndSecretFree(t *testing.T) {
 		`{"proxy":"node-a","url":"https://example.test/test","timeoutMs":0}`,
 		`{"proxy":"node-a","url":"https://example.test/test","timeoutMs":60001}`,
 		`{"proxy":"node\na","url":"https://example.test/test","timeoutMs":5000}`,
+		`{"proxy":"node-a","provider":"bad\nprovider","url":"https://example.test/test","timeoutMs":5000}`,
 	} {
 		response := perform(handler, http.MethodPost, "/api/v1/core/proxies/delay", body, cookie, csrf)
 		if response.Code != http.StatusBadRequest {
@@ -540,6 +541,19 @@ func TestCoreDelayAndProviderEndpointsAreValidatedAndSecretFree(t *testing.T) {
 	oversizedDelay := perform(handler, http.MethodPost, "/api/v1/core/proxies/delay", string(oversizedDelayBody), cookie, csrf)
 	if oversizedDelay.Code != http.StatusBadRequest || len(core.delayCalls) != 1 {
 		t.Fatalf("oversized delay URL = %d calls=%d", oversizedDelay.Code, len(core.delayCalls))
+	}
+
+	providerDelay := perform(handler, http.MethodPost, "/api/v1/core/proxies/delay", `{"proxy":"node-a","provider":"diaff3","url":"`+secretURL+`","timeoutMs":5000}`, cookie, csrf)
+	if providerDelay.Code != http.StatusOK || len(core.delayCalls) != 2 || core.delayCalls[1].provider != "diaff3" {
+		t.Fatalf("provider delay = %d calls=%#v", providerDelay.Code, core.delayCalls)
+	}
+	providerWithoutCSRF := perform(handler, http.MethodPost, "/api/v1/core/proxies/delay", `{"proxy":"node-a","provider":"diaff3","url":"`+secretURL+`","timeoutMs":5000}`, cookie, "")
+	if providerWithoutCSRF.Code != http.StatusForbidden || len(core.delayCalls) != 2 {
+		t.Fatal("provider test bypassed CSRF")
+	}
+	providerUnauthenticated := perform(handler, http.MethodPost, "/api/v1/core/proxies/delay", `{"proxy":"node-a","provider":"diaff3","url":"`+secretURL+`","timeoutMs":5000}`, nil, "")
+	if providerUnauthenticated.Code != http.StatusUnauthorized || len(core.delayCalls) != 2 {
+		t.Fatal("provider test bypassed authentication")
 	}
 
 	providers := perform(handler, http.MethodGet, "/api/v1/core/providers/proxy", "", cookie, "")
@@ -1603,9 +1617,10 @@ func (s fakeLogService) StreamSystemLogs(context.Context, LogQuery) (<-chan LogE
 }
 
 type fakeDelayCall struct {
-	proxy   string
-	testURL string
-	timeout time.Duration
+	proxy    string
+	provider string
+	testURL  string
+	timeout  time.Duration
 }
 
 type fakeProviderUpdate struct {
@@ -1652,8 +1667,8 @@ func (s *fakeCoreService) ProxyGroups(context.Context) ([]ProxyGroup, error) {
 	return nil, nil
 }
 func (s *fakeCoreService) SelectProxy(context.Context, string, string) error { return nil }
-func (s *fakeCoreService) TestProxyDelay(_ context.Context, proxy, testURL string, timeout time.Duration) (ProxyDelayResult, error) {
-	s.delayCalls = append(s.delayCalls, fakeDelayCall{proxy: proxy, testURL: testURL, timeout: timeout})
+func (s *fakeCoreService) TestProxyDelay(_ context.Context, proxy, provider, testURL string, timeout time.Duration) (ProxyDelayResult, error) {
+	s.delayCalls = append(s.delayCalls, fakeDelayCall{proxy: proxy, provider: provider, testURL: testURL, timeout: timeout})
 	return s.delayResult, s.delayErr
 }
 func (s *fakeCoreService) Providers(_ context.Context, kind ProviderKind) ([]Provider, error) {
