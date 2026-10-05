@@ -324,6 +324,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/profiles/", s.handleProfile)
 	s.mux.HandleFunc("/api/v1/proxy-subscriptions", s.handleProxySubscriptions)
 	s.mux.HandleFunc("/api/v1/proxy-subscriptions/", s.handleProxySubscription)
+	s.mux.HandleFunc("/api/v1/converted-rules", s.handleConvertedRules)
 	s.mux.HandleFunc("/api/v1/rule-lists", s.handleRuleLists)
 	s.mux.HandleFunc("/api/v1/rule-lists/", s.handleRuleList)
 	s.mux.HandleFunc("/api/v1/fake-ip-whitelist", s.handleFakeIPWhitelist)

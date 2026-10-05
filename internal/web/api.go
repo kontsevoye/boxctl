@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net/http"
 	"time"
+
+	"github.com/kontsevoye/boxctl/internal/ruleconvert"
 )
 
 var (
@@ -862,7 +864,12 @@ type LifecycleService interface {
 
 // Services are all dependencies of the HTTP layer. Credentials and SessionSecrets
 // are required; feature services may be nil and then return capability-safe 501s.
+type ConvertedRuleService interface {
+	ConvertedRules(context.Context) ([]ruleconvert.Status, error)
+}
+
 type Services struct {
+	ConvertedRules        ConvertedRuleService
 	Credentials           CredentialService
 	AdminSetup            AdminSetupService
 	SessionSecrets        SessionSecretStore

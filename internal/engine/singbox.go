@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kontsevoye/boxctl/internal/ruleconvert"
 	"github.com/kontsevoye/boxctl/internal/state"
 )
 
@@ -40,6 +41,8 @@ const (
 // origins are rejected. The loopback origin default keeps the core controller
 // private when boxctl proxies dashboard requests.
 type SingBoxOptions struct {
+	RuleConverter          *ruleconvert.Service
+	RuleCodecs             func() ruleconvert.Binaries
 	HTTPClient             *http.Client
 	StopTimeout            time.Duration
 	LogBuffer              int
@@ -51,6 +54,8 @@ type SingBoxOptions struct {
 // profile. The user source is never rewritten: candidate sing-box normalizes
 // JSONC into a private runtime document before boxctl applies its owned patch.
 type SingBoxDriver struct {
+	ruleConverter  *ruleconvert.Service
+	ruleCodecs     func() ruleconvert.Binaries
 	httpClient     *http.Client
 	allowedOrigins []string
 	supervisor     *externalProcessSupervisor
@@ -62,7 +67,8 @@ func NewSingBoxDriver(options SingBoxOptions) *SingBoxDriver {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
 	driver := &SingBoxDriver{
-		httpClient:     httpClient,
+		httpClient:    httpClient,
+		ruleConverter: options.RuleConverter, ruleCodecs: options.RuleCodecs,
 		allowedOrigins: append([]string(nil), options.ClashAPIAllowedOrigins...),
 	}
 	driver.supervisor = newExternalProcessSupervisor(externalProcessSupervisorOptions{
@@ -183,6 +189,10 @@ func (d *SingBoxDriver) Prepare(ctx context.Context, request PrepareRequest) (Pr
 		return PreparedCore{}, err
 	}
 	if err := patchSingBoxRuntime(document, request.Capture, controller, allowedOrigins); err != nil {
+		CleanupPreparedRuntime(prepared)
+		return PreparedCore{}, err
+	}
+	if err := prepareConvertedRules(ctx, d.ruleConverter, d.ruleCodecs, document, prepared); err != nil {
 		CleanupPreparedRuntime(prepared)
 		return PreparedCore{}, err
 	}

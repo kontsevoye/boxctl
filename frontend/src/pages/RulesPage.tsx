@@ -2,6 +2,7 @@ import { RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useApp } from '../app-context'
 import { Empty, ErrorPanel, Loading, PageHeader } from '../components/Common'
+import { ConvertedRulesPanel } from '../components/ConvertedRulesPanel'
 import { ProvidersPanel } from '../components/ProvidersPanel'
 import { useCoreDashboard } from '../core-dashboard'
 import { useQuery } from '../hooks'
@@ -13,7 +14,7 @@ export function RulesPage() {
   const { t } = useI18n()
   const query = useQuery<Rule[]>('/core/rules')
   const dashboard = useCoreDashboard()
-  const [tab, setTab] = useState<'rules' | 'providers'>('rules')
+  const [tab, setTab] = useState<'rules' | 'providers' | 'converted'>('rules')
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')
   const [actionFilter, setActionFilter] = useState('all')
@@ -47,7 +48,9 @@ export function RulesPage() {
     <div className="du-tabs du-tabs-box section-tabs" role="tablist" aria-label={t('rules')}>
       <button className={`du-tab ${tab === 'rules' ? 'du-tab-active' : ''}`} role="tab" aria-selected={tab === 'rules'} onClick={() => setTab('rules')}>{t('rules')} · {source.length}</button>
       {providersAvailable && <button className={`du-tab ${tab === 'providers' ? 'du-tab-active' : ''}`} role="tab" aria-selected={tab === 'providers'} onClick={() => setTab('providers')}>{t('providers')} · {dashboard.dashboard?.ruleProviders?.length ?? 0}</button>}
+      <button className={`du-tab ${tab === 'converted' ? 'du-tab-active' : ''}`} role="tab" aria-selected={tab === 'converted'} onClick={() => setTab('converted')}>{t('convertedRules')}</button>
     </div>
+    {tab === 'converted' && <ConvertedRulesPanel />}
     {tab === 'providers' && providersAvailable && <ProvidersPanel kind="rule" providers={dashboard.dashboard?.ruleProviders} loading={dashboard.loading} onRefresh={dashboard.reload} />}
     {tab === 'rules' && <>
       <div className="dashboard-summary-row">
