@@ -2,9 +2,15 @@
   description = "OpenWrt selective-routing manager with pluggable proxy cores";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  # Unstable no longer supports Intel macOS; keep its dev shell supported.
+  inputs.nixpkgs-darwin-intel.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      nixpkgs-darwin-intel,
+    }:
     let
       systems = [
         "aarch64-darwin"
@@ -13,12 +19,17 @@
         "x86_64-linux"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      pkgsFor =
+        system:
+        import (if system == "x86_64-darwin" then nixpkgs-darwin-intel else nixpkgs) {
+          inherit system;
+        };
     in
     {
       devShells = forAllSystems (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = pkgsFor system;
         in
         {
           default = pkgs.mkShell {
@@ -41,6 +52,6 @@
         }
       );
 
-      formatter = forAllSystems (system: (import nixpkgs { inherit system; }).nixfmt-tree);
+      formatter = forAllSystems (system: (pkgsFor system).nixfmt-tree);
     };
 }

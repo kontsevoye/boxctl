@@ -735,7 +735,9 @@ func (manager *ExternalDashboardManager) serveDashboardFile(w http.ResponseWrite
 		http.NotFound(w, r)
 		return
 	}
-	file, err := os.Open(filename)
+	// ensureDashboardWithin confines the path to the managed dashboard root,
+	// and hasDashboardSymlink rejects symlinks in every path component.
+	file, err := os.Open(filename) // #nosec G703 -- custom root and symlink checks above validate the request path.
 	if err != nil {
 		http.NotFound(w, r)
 		return

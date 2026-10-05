@@ -21,7 +21,7 @@
   "devDependencies": {
     "@fontsource/space-grotesk": "5.3.0",
     "gsap": "3.15.0",
-    "hyperframes": "0.8.31",
-    "puppeteer": "25.10.0"
+    "hyperframes": "0.8.128",
+    "puppeteer": "25.12.0"
   }
 }

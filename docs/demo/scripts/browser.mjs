@@ -2,7 +2,7 @@ import { install, computeExecutablePath, Browser } from "@puppeteer/browsers";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-export const buildId = "152.0.7977.30";
+export const buildId = "154.0.8037.92";
 export const cacheDir = fileURLToPath(
   new URL("../.cache/browser", import.meta.url),
 );
