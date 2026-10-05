@@ -38,6 +38,7 @@ interface SettingsDraft {
   form: Settings
   saved: Settings
   listText: Record<ListField, string>
+  tunStackSelected: boolean
 }
 
 export function SettingsPage() {
@@ -63,7 +64,7 @@ export function SettingsPage() {
   const draftEngine = useRef(activeEngine?.id)
   const form = draft?.form
   const listText = draft?.listText ?? emptyListText
-  const dirty = draft !== undefined && settingsDraftDirty(draft.form, draft.listText, draft.saved)
+  const dirty = draft !== undefined && settingsDraftDirty(draft.form, draft.listText, draft.saved, draft.tunStackSelected)
   const editableSection = section === 'general' || section === 'routing'
 
   useEffect(() => {
@@ -87,7 +88,10 @@ export function SettingsPage() {
     navigate('/settings', false, { section: next === 'general' ? undefined : next })
   }
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) => {
-    setDraft((current) => current ? { ...current, form: { ...current.form, [key]: value } } : current)
+    setDraft((current) => current ? {
+      ...current, form: { ...current.form, [key]: value },
+      tunStackSelected: current.tunStackSelected || key === 'tunStack',
+    } : current)
   }
   const updateList = (key: ListField, value: string) => {
     setDraft((current) => current ? { ...current, listText: { ...current.listText, [key]: value } } : current)
@@ -132,7 +136,7 @@ export function SettingsPage() {
   }
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!form || !dirty || busy) return
+    if (!draft || !form || !dirty || busy) return
     setError(undefined)
     setMessage('')
     const validationErrors = settingsPortListErrors(listText)
@@ -168,7 +172,7 @@ export function SettingsPage() {
     try {
       const updated = await request<Settings>('/settings', {
         method: 'PUT',
-        body: JSON.stringify(settingsUpdatePayload(form, listText)),
+        body: JSON.stringify(settingsUpdatePayload(form, listText, draft.tunStackSelected || form.tunStack !== draft.saved.tunStack)),
       })
       setDraft(settingsDraft(updated))
       setPortErrors({})
@@ -401,7 +405,7 @@ export function externalDashboardSupported(capabilities: Capabilities, engine?: 
   return engine ? engine.management.externalDashboard : capabilities.features?.externalDashboard === true
 }
 
-export function settingsUpdatePayload(form: Settings, listText: Record<ListField, string>) {
+export function settingsUpdatePayload(form: Settings, listText: Record<ListField, string>, includeTUNStack = true) {
   return {
     language: form.language,
     logLevel: form.logLevel,
@@ -418,7 +422,9 @@ export function settingsUpdatePayload(form: Settings, listText: Record<ListField
     autoDetectWAN: form.autoDetectWAN ?? true,
     autoDetectLAN: form.autoDetectLAN ?? true,
     interceptRouterOutput: form.interceptRouterOutput ?? true,
-    tunStack: form.tunStack,
+    // The API's default can represent an inherited profile stack. Only an
+    // intentional selection should turn it into a saved override.
+    ...(includeTUNStack ? { tunStack: form.tunStack } : {}),
     tunAddress: form.tunAddress,
     tunMTU: form.tunMTU,
     rejectQUIC: form.rejectQUIC ?? false,
@@ -509,7 +515,7 @@ function settingsListText(settings: Settings): Record<ListField, string> {
 }
 
 function settingsDraft(settings: Settings): SettingsDraft {
-  return { form: settings, saved: settings, listText: settingsListText(settings) }
+  return { form: settings, saved: settings, listText: settingsListText(settings), tunStackSelected: false }
 }
 
 /** Rebase unchanged fields on a fresh snapshot, retaining every edited field. */
@@ -517,7 +523,7 @@ export function reconcileSettingsDraft(current: SettingsDraft | undefined, incom
   if (!current) return settingsDraft(incoming)
   const form = { ...incoming }
   for (const key of Object.keys(current.form) as Array<keyof Settings>) {
-    if (JSON.stringify(current.form[key]) !== JSON.stringify(current.saved[key])) {
+    if ((key === 'tunStack' && current.tunStackSelected) || JSON.stringify(current.form[key]) !== JSON.stringify(current.saved[key])) {
       Object.assign(form, { [key]: current.form[key] })
     }
   }
@@ -526,7 +532,7 @@ export function reconcileSettingsDraft(current: SettingsDraft | undefined, incom
   for (const key of Object.keys(listText) as ListField[]) {
     if (settingsListFieldChanged(key, current.listText[key], previousLists[key])) listText[key] = current.listText[key]
   }
-  return { form, saved: incoming, listText }
+  return { form, saved: incoming, listText, tunStackSelected: current.tunStackSelected }
 }
 
 function settingsListFieldChanged(field: ListField, current: string, saved: string): boolean {
@@ -543,8 +549,8 @@ export function refreshSettingsInterfaces(current: SettingsDraft, incoming: Sett
   return { ...current, form: { ...current.form, ...catalog }, saved: { ...current.saved, ...catalog } }
 }
 
-export function settingsDraftDirty(form: Settings, listText: Record<ListField, string>, saved: Settings): boolean {
-  return (form.maintenanceIntervalMinutes !== undefined && !Number.isFinite(form.maintenanceIntervalMinutes))
+export function settingsDraftDirty(form: Settings, listText: Record<ListField, string>, saved: Settings, tunStackSelected = false): boolean {
+  return tunStackSelected || (form.maintenanceIntervalMinutes !== undefined && !Number.isFinite(form.maintenanceIntervalMinutes))
     || (form.tunMTU !== undefined && !Number.isFinite(form.tunMTU))
     || Object.keys(settingsPortListErrors(listText)).length > 0
     || JSON.stringify(settingsUpdatePayload(form, listText)) !== JSON.stringify(settingsUpdatePayload(saved, settingsListText(saved)))

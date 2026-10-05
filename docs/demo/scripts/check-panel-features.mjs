@@ -17,6 +17,37 @@ export async function checkPanelFeatures({ page, shot, clickText, assertText, pa
     if (!input || input.disabled) throw new Error(`Unavailable toggle ${label}`);
     input.click();
   }, label);
+  const saveSettings = async () => {
+    const savesBefore = state.saves.length;
+    await clickText("button", "Save");
+    await page.waitForFunction(() => !document.querySelector(".settings-save-bar.is-dirty"));
+    assert.equal(state.saves.length, savesBefore + 1);
+    // A success toast can cover the save bar during the next interaction.
+    const dismiss = await page.$('.toast-notice.success .toast-notice-close');
+    if (dismiss) { await dismiss.click(); await dismiss.dispose(); }
+  };
+  // The API can report system while Mihomo inherits another stack from its
+  // profile. A save that does not touch this control must not create an override.
+  await shot("features-untouched-tun", "/settings", "Log level", async () => {
+    await radio("Log level", "warn");
+    await saveSettings();
+  });
+  assert.equal(state.saves.at(-1)?.logLevel, "warn");
+  assert.equal(Object.hasOwn(state.saves.at(-1), "tunStack"), false, "Unrelated saves must omit tunStack");
+  await shot("features-explicit-default-tun", "/settings?section=routing", "TUN stack", async () => {
+    // Clicking even the displayed default must still permit an explicit override.
+    await radio("TUN stack", "system");
+    await saveSettings();
+  });
+  assert.equal(state.saves.at(-1)?.tunStack, "system");
+  await radio("TUN stack", "system");
+  await clickText("button", "Reset changes");
+  await toggle("Block DoT");
+  await saveSettings();
+  assert.equal(Object.hasOwn(state.saves.at(-1), "tunStack"), false, "Reset must discard explicit stack selection");
+  await toggle("Block DoT");
+  await saveSettings();
+  assert.equal(Object.hasOwn(state.saves.at(-1), "tunStack"), false, "Successful save must discard explicit stack selection");
   await shot("features-routing", "/settings?section=routing", "Block DoT", async () => {
     await radio("TUN stack", "mips");
     await toggle("Block DoT");
@@ -59,6 +90,20 @@ export async function checkPanelFeatures({ page, shot, clickText, assertText, pa
   const mounted = () => page.$$eval("tbody[data-connection-id]", (rows) => rows.length);
   await shot("features-connections-desktop", "/connections", "5000 of 5000");
   assert.ok(await mounted() < 100, "5000 connections must not mount 5000 DOM rows");
+  await page.$eval(".connections-table-wrap", (element) => { element.scrollTop = element.scrollHeight / 2; });
+  await pause(500);
+  const sortButton = await page.$(".connections-sort-button");
+  await sortButton.focus();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector('.connections-table th:nth-child(2)').getAttribute('aria-sort') === 'ascending');
+  assert.equal(await sortButton.evaluate((element) => document.activeElement === element), true, "Sorting must retain the focused header button");
+  await page.waitForFunction(() => document.querySelector('.connections-table-wrap').scrollTop === 0);
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector('.connections-table th:nth-child(2)').getAttribute('aria-sort') === 'descending');
+  assert.equal(await sortButton.evaluate((element) => document.activeElement === element), true, "Repeated keyboard sorting must keep working");
+  await sortButton.dispose();
+  // Restore the original rate sort for the live-anchor checks below.
+  await page.click('.connections-table th:nth-child(6) button');
   await page.type(".proxies-search input", "host-04999");
   await assertText("1 of 5000");
   await assertText("host-04999.example.test");
@@ -120,5 +165,5 @@ export async function checkPanelFeatures({ page, shot, clickText, assertText, pa
   await page.keyboard.press("End");
   await page.waitForSelector('tbody[data-connection-id="stress-04999"]');
   await shot("features-connections-mobile-end", null, "host-04999.example.test");
-  return { settingsSaveAndReload: true, invalidDoTBlocked: true, singBoxMipsDisabled: true, rows: 5000, boundedDOM: true, offscreenSearch: true, regexAndDeviceFilters: true, tabs: true, liveAnchor: true, closeCorrectID: true, mobileExpandedAndEnd: true };
+  return { settingsSaveAndReload: true, untouchedTUNPreserved: true, explicitDefaultTUN: true, invalidDoTBlocked: true, singBoxMipsDisabled: true, rows: 5000, boundedDOM: true, keyboardSortFocus: true, offscreenSearch: true, regexAndDeviceFilters: true, tabs: true, liveAnchor: true, closeCorrectID: true, mobileExpandedAndEnd: true };
 }
