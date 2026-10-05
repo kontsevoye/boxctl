@@ -152,6 +152,121 @@ After applying the dnsmasq/firewall generation, boxctl performs a fresh query
 below the reserved `.invalid` TLD and rolls the whole activation back on DNS
 failure; `SERVFAIL` and `REFUSED` do not count as readiness.
 
+### Remote rule-set conversion
+
+Prefix a remote rule-set's native `url` with `convert:` in the panel's profile
+editor. boxctl preserves this source profile and replaces the URL only in the
+prepared runtime with a registered loopback HTTP resource. No public proxy
+service, additional daemon, or UCI setting is required.
+
+For a sing-box profile:
+
+```json
+{
+  "type": "remote",
+  "format": "binary",
+  "tag": "example-rules",
+  "url": "convert:https://example.org/rules.mrs",
+  "update_interval": "24h"
+}
+```
+
+For a Mihomo profile, inside `rule-providers`:
+
+```yaml
+example-rules:
+  type: http
+  url: convert:https://example.org/rules.srs
+  interval: 86400
+```
+
+The examples use placeholder hosts; substitute the publisher's real rule-set
+URL. Prefer the publisher's native target artifact when one exists: it needs
+no conversion. The converter recognizes the contents, not the URL suffix.
+For ambiguous text, use `convert:domain:https://…`, `convert:ipcidr:https://…`,
+or `convert:classical:https://…`.
+
+| Source | sing-box output | Mihomo output |
+| --- | --- | --- |
+| sing-box source JSON/JSONC or binary SRS | SRS | MRS for pure domain or destination-IP sets; otherwise classical text |
+| Mihomo YAML/text (`domain`, `ipcidr`, `classical`) or MRS | SRS | MRS for pure domain or destination-IP sets; otherwise classical text |
+| Plain domain or IPv4/IPv6/CIDR lists | SRS | MRS |
+
+Binary encoding and decoding use the installed native core executables; install
+both cores through Settings for bidirectional binary conversion. MRS supports
+only `domain` and `ipcidr`, so mixed sets, keywords, regexes and compound rules
+use native Mihomo `classical` text. The selection is based on the converted
+predicates, not the declared source format. See the upstream
+[Mihomo provider formats](https://wiki.metacubex.one/config/rule-providers/)
+and [sing-box headless rules](https://sing-box.sagernet.org/configuration/rule-set/headless-rule/).
+
+Recognizing every container format does not make every predicate portable.
+Cross-engine conversion preserves domain boundaries, IPv4/IPv6 CIDRs, source
+addresses, ports/ranges, TCP/UDP, supported process fields and AND/OR/NOT
+grouping. Regexes must belong to the common ASCII subset; case handling is
+explicit. Mihomo's case-insensitive process-name rules and byte-based process
+wildcards have no supported sing-box equivalent. Engine-specific predicates, GeoIP/GeoSite database references,
+`no-resolve`, incompatible regex constructs and unknown fields produce an
+error instead of being omitted. Compiled AdGuard SRS cannot be decompiled
+losslessly by the native sing-box command and is rejected. For JSON/SRS to
+SRS, supported sing-box-only headless fields are retained. Empty sets and inputs
+over 32 MiB are rejected. Currently each converted sing-box set needs a single
+string tag.
+
+**Updates and failures.** The core keeps ownership of its native update
+interval and supported provider refresh API. Each request to the local URL
+checks the upstream with ETag/Last-Modified, converts changed content, then
+atomically publishes it. There is no second update scheduler. Unchanged
+content reuses the compiled artifact; the core receives its own output ETag.
+If download or conversion fails, the endpoint returns an error and retains
+the last good artifact, so the core keeps its previous rules. The cache also
+seeds core startup. A provider's output format/behavior is fixed for a running
+configuration: a change requiring MRS → classical returns an explicit error
+until the profile is prepared/applied again, creating a new URL. The old
+registration remains available for rollback.
+
+Cache and stable listener identity live under
+`<root>/.boxctl/rule-converter`, with private permissions. Each registration
+keeps its current and previous artifact; registrations for old profiles are
+retained. Cache identity includes source options and the installed codec
+binaries. The HTTP listener binds only to `127.0.0.1`, uses opaque registered
+paths, and accepts neither arbitrary URL parameters nor browser-originated
+requests. The port is internal and independent of the panel's LAN/TLS listener.
+
+**Download routing.** Source headers and an explicit download proxy/detour
+are retained; proxy-group selection is performed by the running native core
+through an authenticated loopback bridge. The local artifact itself is always
+fetched directly. On a first start with a proxy detour, provide a valid local
+seed in sing-box `initial_path` or Mihomo provider `path`: the new core cannot
+download its own bootstrap rules before it is running. Existing valid cache
+also satisfies this requirement. There is no silent fallback from proxy to
+DIRECT. HTTP/1.1 and HTTP/2 with the Go client are supported; unsupported custom
+TLS, resolver and transport options fail validation rather than being ignored.
+
+**Panel status.** Rules → Converted rule sets shows only registrations in the
+active runtime, their last source check/conversion, output format and failure.
+“Refresh status” reads this information; it does not force a core update.
+“File ready” means conversion succeeded, not that the core has applied it.
+Mihomo's native provider refresh remains available in the Providers tab;
+sing-box updates these remote sets on its configured interval.
+
+Native codec and traffic/update tests are enabled with installed core binaries:
+
+```sh
+BOXCTL_TEST_SING_BOX=/absolute/path/to/sing-box \
+BOXCTL_TEST_MIHOMO=/absolute/path/to/mihomo \
+go test -v ./internal/ruleconvert ./internal/engine \
+  -run 'TestNativeCodecs|TestNativeConvertedRuleRefresh'
+```
+
+On macOS, cross-compile these packages with `CGO_ENABLED=0 GOOS=linux
+GOARCH=arm64 go test -c`, transfer the test executables into the OpenWrt VM,
+and run them there with the same environment variables and `-test.run`.
+These tests exercise both cores, scheduled refresh, real blocked/allowed
+traffic, proxy-group download bridges, MRS/classical selection, converter
+restart and last-good behavior on upstream failure. The standard VM suite
+below remains the check for OpenWrt lifecycle and capture integration.
+
 ## Requirements
 
 The reproducible development environment is provided by Nix. Enter it before

@@ -26,6 +26,7 @@ import (
 	"github.com/kontsevoye/boxctl/internal/engine"
 	"github.com/kontsevoye/boxctl/internal/eventlog"
 	"github.com/kontsevoye/boxctl/internal/platform/openwrt"
+	"github.com/kontsevoye/boxctl/internal/ruleconvert"
 	"github.com/kontsevoye/boxctl/internal/rulelist"
 	"github.com/kontsevoye/boxctl/internal/state"
 	updatepkg "github.com/kontsevoye/boxctl/internal/update"
@@ -613,7 +614,11 @@ func (actions *Actions) ValidateEngineConfig(ctx context.Context, options cli.Co
 	if err != nil {
 		return err
 	}
-	driver := engine.NewSingBoxDriver(engine.SingBoxOptions{})
+	layout, err := state.NewLayout(root)
+	if err != nil {
+		return err
+	}
+	driver := engine.NewSingBoxDriver(engine.SingBoxOptions{RuleConverter: ruleconvert.New(root), RuleCodecs: ruleCodecs(layout)})
 	preparer, err := NewActiveSingBoxPreparer(root, driver)
 	if err != nil {
 		return err
@@ -1009,8 +1014,18 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 	if err != nil {
 		return nil, err
 	}
-	mihomoOptions := engine.MihomoOptions{}
-	singBoxOptions := engine.SingBoxOptions{ClashAPIAllowedOrigins: singBoxControllerOrigins(options.PublicOrigin)}
+	converter := ruleconvert.New(root)
+	if err := converter.Start(); err != nil {
+		return nil, err
+	}
+	converterOwned := true
+	defer func() {
+		if converterOwned {
+			_ = converter.Close()
+		}
+	}()
+	mihomoOptions := engine.MihomoOptions{RuleConverter: converter, RuleCodecs: ruleCodecs(layout)}
+	singBoxOptions := engine.SingBoxOptions{RuleConverter: converter, RuleCodecs: ruleCodecs(layout), ClashAPIAllowedOrigins: singBoxControllerOrigins(options.PublicOrigin)}
 	if runtime.GOOS == "linux" {
 		// Both mutually-exclusive drivers share the historical state path. The
 		// v2 record is engine-qualified, while Mihomo can still adopt and upgrade
@@ -1383,6 +1398,7 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		}
 	}
 	services.SystemLogs = SystemLogs{Ring: ring}
+	services.ConvertedRules = ConvertedRulesService{Converter: converter, Lifecycle: lifecycle}
 	handler, err := web.NewHandlerContext(ctx, web.Config{
 		CookieSecure: options.CookieSecure,
 		AllowedHosts: options.AllowedHosts,
@@ -1413,6 +1429,7 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		go managerUpdates.Run(ctx)
 	}
 	hostOwned = false
+	converterOwned = false
 	return &serveRuntime{Handler: handler, Lifecycle: lifecycle, HandoffMarkerPending: handoffAdopted, Close: func() error {
 		stopMaintenance()
 		stopAutomaticUpdates()
@@ -1422,7 +1439,7 @@ func defaultServeRuntime(ctx context.Context, root string, options serveBuildOpt
 		if coreService != nil {
 			coreErr = coreService.Close()
 		}
-		return errors.Join(coreErr, host.Close())
+		return errors.Join(coreErr, host.Close(), converter.Close())
 	}}, nil
 }
 
@@ -1647,8 +1664,13 @@ func lockBackupImport(ctx context.Context, lifecycle *Lifecycle, store, openWrtL
 }
 
 func defaultOneShotRuntime(root, lockRoot string, runner openwrt.Runner) (*oneShotRuntime, error) {
-	mihomoDriver := engine.NewMihomoDriver(engine.MihomoOptions{})
-	singBoxDriver := engine.NewSingBoxDriver(engine.SingBoxOptions{})
+	layout, err := state.NewLayout(root)
+	if err != nil {
+		return nil, err
+	}
+	converter := ruleconvert.New(root)
+	mihomoDriver := engine.NewMihomoDriver(engine.MihomoOptions{RuleConverter: converter, RuleCodecs: ruleCodecs(layout)})
+	singBoxDriver := engine.NewSingBoxDriver(engine.SingBoxOptions{RuleConverter: converter, RuleCodecs: ruleCodecs(layout)})
 	mihomoPreparer, err := NewActiveMihomoPreparer(root, mihomoDriver)
 	if err != nil {
 		return nil, err
@@ -1703,7 +1725,11 @@ func removeOneShotRuntime(prepared engine.PreparedCore) {
 }
 
 func (actions *Actions) defaultValidateConfig(ctx context.Context, root, path string) error {
-	driver := engine.NewMihomoDriver(engine.MihomoOptions{})
+	layout, err := state.NewLayout(root)
+	if err != nil {
+		return err
+	}
+	driver := engine.NewMihomoDriver(engine.MihomoOptions{RuleConverter: ruleconvert.New(root), RuleCodecs: ruleCodecs(layout)})
 	preparer, err := NewActiveMihomoPreparer(root, driver)
 	if err != nil {
 		return err

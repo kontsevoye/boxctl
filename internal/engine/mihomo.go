@@ -17,6 +17,7 @@ import (
 	"time"
 
 	configpkg "github.com/kontsevoye/boxctl/internal/config"
+	"github.com/kontsevoye/boxctl/internal/ruleconvert"
 )
 
 const (
@@ -47,9 +48,11 @@ var mihomoCapabilities = Capabilities{
 // MihomoOptions controls supervision and HTTP behavior. Zero values are safe
 // production defaults.
 type MihomoOptions struct {
-	HTTPClient  *http.Client
-	StopTimeout time.Duration
-	LogBuffer   int
+	RuleConverter *ruleconvert.Service
+	RuleCodecs    func() ruleconvert.Binaries
+	HTTPClient    *http.Client
+	StopTimeout   time.Duration
+	LogBuffer     int
 	// ProcessStatePath enables Linux manager-to-manager process handoff. The
 	// core then inherits stable stdio descriptors instead of parent-owned pipes.
 	ProcessStatePath string
@@ -58,8 +61,10 @@ type MihomoOptions struct {
 // MihomoDriver implements Config, Runtime and Control for an external Mihomo
 // binary. One driver supervises at most one process at a time.
 type MihomoDriver struct {
-	httpClient *http.Client
-	supervisor *externalProcessSupervisor
+	ruleConverter *ruleconvert.Service
+	ruleCodecs    func() ruleconvert.Binaries
+	httpClient    *http.Client
+	supervisor    *externalProcessSupervisor
 }
 
 func NewMihomoDriver(options MihomoOptions) *MihomoDriver {
@@ -67,7 +72,7 @@ func NewMihomoDriver(options MihomoOptions) *MihomoDriver {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
-	driver := &MihomoDriver{httpClient: httpClient}
+	driver := &MihomoDriver{httpClient: httpClient, ruleConverter: options.RuleConverter, ruleCodecs: options.RuleCodecs}
 	driver.supervisor = newExternalProcessSupervisor(externalProcessSupervisorOptions{
 		Engine: mihomoEngineName, DisplayName: "Mihomo",
 		ProcessStatePath: options.ProcessStatePath, StopTimeout: options.StopTimeout, LogBuffer: options.LogBuffer,
@@ -173,6 +178,10 @@ func (d *MihomoDriver) Prepare(ctx context.Context, request PrepareRequest) (Pre
 		return PreparedCore{}, fmt.Errorf("prepare Mihomo runtime config: %w", err)
 	}
 
+	if err := prepareMihomoConvertedRules(ctx, d.ruleConverter, d.ruleCodecs, prepared); err != nil {
+		CleanupPreparedRuntime(prepared)
+		return PreparedCore{}, err
+	}
 	if err := d.Validate(ctx, prepared); err != nil {
 		CleanupPreparedRuntime(prepared)
 		return PreparedCore{}, err

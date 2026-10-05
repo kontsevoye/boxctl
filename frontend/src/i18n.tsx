@@ -7,6 +7,17 @@ type Dictionary = Record<string, string>
 
 const dictionaries: Record<Locale, Dictionary> = {
   ru: {
+    convertedRules: 'Конвертированные списки',
+    convertedRulesName: 'Название',
+    convertedRulesHint: 'Ядро обновляет эти списки по расписанию из профиля. Здесь показаны результаты загрузки и конвертации; применение проверяйте в правилах ядра.',
+    convertedRulesEmpty: 'В активной конфигурации нет списков с convert:.',
+    convertedRulesFormat: 'Формат результата',
+    convertedRulesChecked: 'Последняя проверка источника',
+    convertedRulesBuilt: 'Последняя конвертация',
+    convertedRulesError: 'Ошибка обновления — сохранена предыдущая версия',
+    convertedRulesReady: 'Файл готов',
+    convertedRulesInspect: 'Обновить сведения',
+
     checkUpdates: 'Проверить обновления',
     checkingUpdates: 'Проверяем…',
     passkeys: "Пасскеи",
@@ -494,6 +505,17 @@ const dictionaries: Record<Locale, Dictionary> = {
     savedResponseRecovered: 'Ответ сохранения был прерван, но конфигурация уже находится на сервере. Проверьте состояние ядра.',
   },
   en: {
+    convertedRules: 'Converted rule sets',
+    convertedRulesName: 'Name',
+    convertedRulesHint: 'The core updates these sets on the profile schedule. This view reports downloads and conversion; check core rules to verify application.',
+    convertedRulesEmpty: 'The active configuration has no convert: rule sets.',
+    convertedRulesFormat: 'Output format',
+    convertedRulesChecked: 'Last source check',
+    convertedRulesBuilt: 'Last conversion',
+    convertedRulesError: 'Update failed — previous version retained',
+    convertedRulesReady: 'File ready',
+    convertedRulesInspect: 'Refresh status',
+
     checkUpdates: 'Check for updates',
     checkingUpdates: 'Checking…',
     passkeys: "Passkeys",
