@@ -4,6 +4,7 @@ import { connectionVirtualRange, connectionVirtualSpacers, resolveConnectionAnch
 
 interface Props {
   ids: string[]
+  resetKey: string
   label: string
   columnCount: number
   detailIndex: number
@@ -11,10 +12,11 @@ interface Props {
   renderRow: (index: number, measure: (element: HTMLTableSectionElement | null) => void) => ReactNode
 }
 
-export function VirtualConnectionTable({ ids, label, columnCount, detailIndex, header, renderRow }: Props) {
+export function VirtualConnectionTable({ ids, resetKey, label, columnCount, detailIndex, header, renderRow }: Props) {
   const viewport = useRef<HTMLDivElement>(null)
   const head = useRef<HTMLTableSectionElement>(null)
   const previousIDs = useRef(ids)
+  const previousResetKey = useRef(resetKey)
   const collapsedSizes = useRef(new Map<string, number>())
   const previousDetailID = useRef<string | undefined>(undefined)
   const anchor = useRef<ConnectionScrollAnchor | null>(null)
@@ -96,7 +98,12 @@ export function VirtualConnectionTable({ ids, label, columnCount, detailIndex, h
   }, [ids, virtualizer])
 
   useLayoutEffect(() => {
-    if (previousIDs.current !== ids && anchor.current) {
+    // User filters/sorts reset the viewport without remounting the header and
+    // losing keyboard focus. Live snapshots still preserve the reading anchor.
+    if (previousResetKey.current !== resetKey) {
+      anchor.current = null
+      virtualizer.scrollToOffset(0)
+    } else if (previousIDs.current !== ids && anchor.current) {
       const index = resolveConnectionAnchor(ids, anchor.current)
       // getTotalSize populates the keyed measurement cache before lookup.
       virtualizer.getTotalSize()
@@ -105,6 +112,7 @@ export function VirtualConnectionTable({ ids, label, columnCount, detailIndex, h
       else virtualizer.scrollToOffset(0)
     }
     previousIDs.current = ids
+    previousResetKey.current = resetKey
     captureAnchor(virtualizer)
   })
 

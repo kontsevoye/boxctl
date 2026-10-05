@@ -12,6 +12,10 @@ import (
 )
 
 var (
+	ErrProxyNotFound  = errors.New("proxy was not found")
+	ErrProxyAmbiguous = errors.New("proxy name belongs to multiple providers")
+	ErrDelayTimeout   = errors.New("proxy delay test timed out")
+	ErrDelayFailed    = errors.New("proxy delay test failed")
 	// ErrUnsupported identifies an operation that the active engine does not
 	// advertise through Capabilities.
 	ErrUnsupported = errors.New("engine capability is unsupported")
@@ -306,7 +310,7 @@ type Control interface {
 	Proxies(context.Context) ([]Proxy, error)
 	Groups(context.Context) ([]ProxyGroup, error)
 	Select(context.Context, string, string) error
-	Delay(context.Context, string, string, time.Duration) (time.Duration, error)
+	Delay(context.Context, string, string, string, time.Duration) (time.Duration, error)
 	Providers(context.Context, ProviderKind) ([]Provider, error)
 	UpdateProvider(context.Context, ProviderKind, string) error
 	Rules(context.Context) ([]Rule, error)
@@ -353,14 +357,15 @@ type DelaySample struct {
 }
 
 type Proxy struct {
-	Name    string
-	Type    string
-	Icon    string
-	UDP     bool
-	Alive   *bool
-	Now     string
-	All     []string
-	History []DelaySample
+	Provider string
+	Name     string
+	Type     string
+	Icon     string
+	UDP      bool
+	Alive    *bool
+	Now      string
+	All      []string
+	History  []DelaySample
 }
 
 type ProxyGroup struct {

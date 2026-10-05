@@ -42,6 +42,7 @@ func NewSingBoxController(endpoint ControllerEndpoint, client *http.Client) (*Si
 	if err != nil {
 		return nil, singBoxControllerError(err)
 	}
+	clash.proxyProviders = false
 	return &SingBoxController{clash: clash}, nil
 }
 
@@ -70,8 +71,11 @@ func (c *SingBoxController) Select(ctx context.Context, group, proxy string) err
 	return singBoxControllerError(c.clash.Select(ctx, group, proxy))
 }
 
-func (c *SingBoxController) Delay(ctx context.Context, proxy, testURL string, timeout time.Duration) (time.Duration, error) {
-	value, err := c.clash.Delay(ctx, proxy, testURL, timeout)
+func (c *SingBoxController) Delay(ctx context.Context, proxy, provider, testURL string, timeout time.Duration) (time.Duration, error) {
+	if provider != "" {
+		return 0, unsupported(CapabilityProxyProviders)
+	}
+	value, err := c.clash.Delay(ctx, proxy, provider, testURL, timeout)
 	return value, singBoxControllerError(err)
 }
 

@@ -116,7 +116,7 @@ func TestMihomoControllerControlPlane(t *testing.T) {
 	if err := client.Select(ctx, "group/😀", "DIRECT"); err != nil {
 		t.Fatalf("Select() error = %v", err)
 	}
-	delay, err := client.Delay(ctx, "Hidden", "https://example.test/a?b=c", 2500*time.Millisecond)
+	delay, err := client.Delay(ctx, "Hidden", "", "https://example.test/a?b=c", 2500*time.Millisecond)
 	if err != nil || delay != 37*time.Millisecond {
 		t.Fatalf("Delay() = %s, %v", delay, err)
 	}
@@ -393,7 +393,7 @@ func TestMihomoControllerRejectsInvalidInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Delay(context.Background(), "proxy", "url", 0); err == nil {
+	if _, err := client.Delay(context.Background(), "proxy", "", "url", 0); err == nil {
 		t.Fatal("Delay accepted zero timeout")
 	}
 	if _, err := client.Providers(context.Background(), ProviderKind("bad")); err == nil {

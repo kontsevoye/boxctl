@@ -85,9 +85,10 @@ type coreBackendFake struct {
 }
 
 type coreDelayCall struct {
-	proxy   string
-	testURL string
-	timeout time.Duration
+	proxy    string
+	provider string
+	testURL  string
+	timeout  time.Duration
 }
 
 type coreProviderUpdate struct {
@@ -150,13 +151,13 @@ func (fake *coreBackendFake) Select(ctx context.Context, group, proxy string) er
 	return nil
 }
 
-func (fake *coreBackendFake) Delay(ctx context.Context, proxy, testURL string, timeout time.Duration) (time.Duration, error) {
+func (fake *coreBackendFake) Delay(ctx context.Context, proxy, provider, testURL string, timeout time.Duration) (time.Duration, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	fake.delayCalls = append(fake.delayCalls, coreDelayCall{proxy: proxy, testURL: testURL, timeout: timeout})
+	fake.delayCalls = append(fake.delayCalls, coreDelayCall{proxy: proxy, provider: provider, testURL: testURL, timeout: timeout})
 	return fake.delay, fake.delayErr
 }
 
@@ -559,7 +560,7 @@ func TestCoreServiceTranslatesControlDTOs(t *testing.T) {
 	backend.capabilities = engine.Capabilities{Groups: true, Selection: true, Rules: true, Connections: true, CloseConnection: true, CloseAllConnections: true}
 	backend.groups = []engine.ProxyGroup{
 		{Name: "B", Type: "Selector", Now: "DIRECT", Members: []string{"DIRECT"}},
-		{Name: "A", Type: "URLTest", Icon: "https://icons.example/group.png", Now: "node-1", Members: []string{"node-1", "node-2"}, Options: []engine.Proxy{{Name: "node-1", Type: "VLESS", Icon: "https://icons.example/node.png", History: []engine.DelaySample{{Delay: 37}}}}},
+		{Name: "A", Type: "URLTest", Icon: "https://icons.example/group.png", Now: "node-1", Members: []string{"node-1", "node-2"}, Options: []engine.Proxy{{Name: "node-1", Provider: "diaff3", Type: "VLESS", Icon: "https://icons.example/node.png", History: []engine.DelaySample{{Delay: 37}}}}},
 	}
 	started := "2026-08-25T11:12:13.123Z"
 	backend.connections = engine.ConnectionsSnapshot{Connections: []engine.Connection{{
@@ -583,7 +584,7 @@ func TestCoreServiceTranslatesControlDTOs(t *testing.T) {
 	if err != nil || len(groups) != 2 || groups[0].Name != "A" || groups[0].Selected != "node-1" || len(groups[0].Options) != 2 {
 		t.Fatalf("ProxyGroups() = %#v, %v", groups, err)
 	}
-	if groups[0].Icon != "https://icons.example/group.png" || groups[0].Options[0].Icon != "https://icons.example/node.png" || groups[0].Options[0].Type != "VLESS" || groups[0].Options[0].DelayMS == nil || *groups[0].Options[0].DelayMS != 37 {
+	if groups[0].Icon != "https://icons.example/group.png" || groups[0].Options[0].Icon != "https://icons.example/node.png" || groups[0].Options[0].Type != "VLESS" || groups[0].Options[0].Provider != "diaff3" || groups[0].Options[0].DelayMS == nil || *groups[0].Options[0].DelayMS != 37 {
 		t.Fatalf("ProxyGroups() did not preserve option metadata: %#v", groups[0].Options)
 	}
 	if err := service.SelectProxy(context.Background(), "A", "node-2"); err != nil {
@@ -721,8 +722,8 @@ func TestCoreServiceTranslatesDelayAndProviderControlWithoutPaths(t *testing.T) 
 	}
 	defer service.Close()
 
-	delay, err := service.TestProxyDelay(context.Background(), "node-a", "https://example.test/generate_204?token=secret", 5*time.Second)
-	if err != nil || delay.Proxy != "node-a" || delay.DelayMS != 187 {
+	delay, err := service.TestProxyDelay(context.Background(), "node-a", "diaff3", "https://example.test/generate_204?token=secret", 5*time.Second)
+	if err != nil || delay.Proxy != "node-a" || delay.Provider != "diaff3" || delay.DelayMS != 187 {
 		t.Fatalf("TestProxyDelay() = %#v, %v", delay, err)
 	}
 	providers, err := service.Providers(context.Background(), web.ProviderProxy)
@@ -741,7 +742,7 @@ func TestCoreServiceTranslatesDelayAndProviderControlWithoutPaths(t *testing.T) 
 	}
 
 	backend.mu.Lock()
-	if len(backend.delayCalls) != 1 || backend.delayCalls[0] != (coreDelayCall{proxy: "node-a", testURL: "https://example.test/generate_204?token=secret", timeout: 5 * time.Second}) {
+	if len(backend.delayCalls) != 1 || backend.delayCalls[0] != (coreDelayCall{proxy: "node-a", provider: "diaff3", testURL: "https://example.test/generate_204?token=secret", timeout: 5 * time.Second}) {
 		t.Fatalf("delay calls = %#v", backend.delayCalls)
 	}
 	if len(backend.providerUpdates) != 1 || backend.providerUpdates[0] != (coreProviderUpdate{kind: engine.ProviderRule, name: "rules"}) {
@@ -751,7 +752,7 @@ func TestCoreServiceTranslatesDelayAndProviderControlWithoutPaths(t *testing.T) 
 	backend.capabilities.ProxyProviders = false
 	backend.mu.Unlock()
 
-	if _, err := service.TestProxyDelay(context.Background(), "node-a", "https://example.test", time.Second); !errors.Is(err, engine.ErrUnsupported) {
+	if _, err := service.TestProxyDelay(context.Background(), "node-a", "", "https://example.test", time.Second); !errors.Is(err, engine.ErrUnsupported) {
 		t.Fatalf("TestProxyDelay(unsupported) error = %v", err)
 	}
 	if _, err := service.Providers(context.Background(), web.ProviderProxy); !errors.Is(err, engine.ErrUnsupported) {
@@ -819,7 +820,7 @@ func TestCoreServiceStreamsDashboardFromCoreEventsAndMutationInvalidation(t *tes
 	backend.delay = 73 * time.Millisecond
 	backend.groups[0].Options[1].History = []engine.DelaySample{{Time: "later", Delay: 73}}
 	backend.mu.Unlock()
-	if _, err := service.TestProxyDelay(ctx, "node-b", "https://example.test/generate_204", time.Second); err != nil {
+	if _, err := service.TestProxyDelay(ctx, "node-b", "", "https://example.test/generate_204", time.Second); err != nil {
 		t.Fatal(err)
 	}
 	delayChanged := receiveDashboard(t, stream)
@@ -1084,5 +1085,25 @@ func testCapturePlan() engine.CapturePlan {
 		TCP:      engine.ProtocolCapture{Method: engine.CaptureTPROXY, Port: 7894},
 		UDP:      engine.ProtocolCapture{Method: engine.CaptureTPROXY, Port: 7894},
 		LoopMark: 2,
+	}
+}
+
+func TestDelayErrorsHaveSafePublicStatus(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		cause  error
+		status int
+		code   string
+	}{
+		{engine.ErrProxyNotFound, 404, "proxy_not_found"},
+		{engine.ErrProxyAmbiguous, 409, "ambiguous_proxy"},
+		{errors.Join(engine.ErrDelayTimeout, context.DeadlineExceeded), 504, "delay_timeout"},
+		{engine.ErrDelayFailed, 502, "delay_failed"},
+	} {
+		err := translateCoreError(errors.Join(tc.cause, errors.New("private-controller-url-and-secret")))
+		var public *web.PublicError
+		if !errors.As(err, &public) || public.Status != tc.status || public.Code != tc.code || strings.Contains(public.Message, "private") {
+			t.Fatalf("public delay error = %#v", public)
+		}
 	}
 }

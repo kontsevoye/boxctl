@@ -8,12 +8,13 @@ import { ProvidersPanel } from '../components/ProvidersPanel'
 import { useCoreDashboard } from '../core-dashboard'
 import { useI18n } from '../i18n'
 import type { ProxyDelayResult, ProxyGroup, ProxyOption } from '../types'
+import { proxyKey, testProxyBatch } from './proxy-latency'
 import '../styles/proxies.css'
 
 type ProxyTab = 'groups' | 'providers'
 
 const latencyFor = (option: ProxyOption | undefined, delays: Record<string, number>) =>
-  option ? delays[option.name] ?? option.delayMs : undefined
+  option ? delays[proxyKey(option)] ?? option.delayMs : undefined
 
 const latencyTone = (delay: number | undefined, alive?: boolean) => {
   if (alive === false) return 'bad'
@@ -21,6 +22,12 @@ const latencyTone = (delay: number | undefined, alive?: boolean) => {
   if (delay < 250) return 'good'
   if (delay < 800) return 'warning'
   return 'bad'
+}
+
+const toneFor = (option: ProxyOption | undefined, delays: Record<string, number>, errors: Record<string, string>) => {
+  if (!option) return 'unknown'
+  const key = proxyKey(option)
+  return latencyTone(latencyFor(option, delays), errors[key] ? false : delays[key] !== undefined ? true : option.alive)
 }
 
 const groupTypeLabel = (type: string) => type.replaceAll('-', ' ').toLocaleUpperCase()
@@ -37,6 +44,7 @@ export function ProxiesPage() {
   const [typeFilter, setTypeFilter] = useState('all')
   const [expandedName, setExpandedName] = useState<string | null>()
   const [delays, setDelays] = useState<Record<string, number>>({})
+  const [delayErrors, setDelayErrors] = useState<Record<string, string>>({})
   const providersAvailable = capabilities.features?.proxyProviders === true
   const canTestDelay = canPerform(capabilities, 'testProxyDelay')
   const canSetMode = canPerform(capabilities, 'setRoutingMode')
@@ -115,17 +123,29 @@ export function ProxiesPage() {
     }
   }
 
-  const fetchDelay = async (proxy: string) => request<ProxyDelayResult>('/core/proxies/delay', {
+  const fetchDelay = async (proxy: ProxyOption) => request<ProxyDelayResult>('/core/proxies/delay', {
     method: 'POST',
-    body: JSON.stringify({ proxy, url: 'https://www.gstatic.com/generate_204', timeoutMs: 5000 }),
+    body: JSON.stringify({ proxy: proxy.name, provider: proxy.provider, url: 'https://www.gstatic.com/generate_204', timeoutMs: 5000 }),
   })
 
-  const testDelay = async (proxy: string) => {
-    setBusy(`delay:${proxy}`)
+  const testDelays = async (proxies: ProxyOption[], busyKey: string) => {
+    if (proxies.length === 0) return
+    setBusy(busyKey)
     setError(undefined)
+    const keys = new Set(proxies.map(proxyKey))
+    setDelays((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !keys.has(key))))
+    setDelayErrors((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !keys.has(key))))
     try {
-      const result = await fetchDelay(proxy)
-      setDelays((current) => ({ ...current, [proxy]: result.delayMs }))
+      await testProxyBatch(proxies, fetchDelay, (outcomes) => {
+        setDelays((current) => ({ ...current, ...Object.fromEntries(outcomes.flatMap((outcome) =>
+          outcome.result ? [[proxyKey(outcome.proxy), outcome.result.delayMs]] : [],
+        )) }))
+        setDelayErrors((current) => ({ ...current, ...Object.fromEntries(outcomes.flatMap((outcome) => {
+          if (outcome.result) return []
+          const code = outcome.error instanceof APIError ? outcome.error.code : 'delay_failed'
+          return [[proxyKey(outcome.proxy), code]]
+        })) }))
+      })
     } catch (reason) {
       fail(reason)
     } finally {
@@ -133,32 +153,15 @@ export function ProxiesPage() {
     }
   }
 
-  const testVisible = async () => {
-    const names = [...new Set(groups.flatMap((group) => (group.options ?? []).map((option) => option.name)))]
-    if (names.length === 0) return
-    setBusy('delay:*')
-    setError(undefined)
-    try {
-      const results: ProxyDelayResult[] = []
-      let lastFailure: unknown
-      for (let index = 0; index < names.length; index += 4) {
-        const batch = await Promise.allSettled(names.slice(index, index + 4).map(fetchDelay))
-        for (const result of batch) {
-          if (result.status === 'fulfilled') results.push(result.value)
-          else lastFailure = result.reason
-        }
-      }
-      setDelays((current) => Object.fromEntries([
-        ...Object.entries(current),
-        ...results.map((result) => [result.proxy, result.delayMs] as const),
-      ]))
-      if (lastFailure !== undefined) fail(lastFailure)
-    } catch (reason) {
-      fail(reason)
-    } finally {
-      setBusy('')
-    }
-  }
+  const testDelay = (proxy: ProxyOption) => testDelays([proxy], `delay:${proxyKey(proxy)}`)
+  const testGroup = (group: ProxyGroup) => testDelays(group.options ?? [], `group:${group.name}`)
+  const testVisible = () => testDelays(groups.flatMap((group) => group.options ?? []), 'delay:*')
+
+  const localizedDelayErrors = Object.fromEntries(Object.entries(delayErrors).map(([key, code]) => [key,
+    code === 'delay_timeout' ? t('latencyTimeout')
+      : code === 'proxy_not_found' ? t('latencyNotFound')
+      : code === 'ambiguous_proxy' ? t('latencyAmbiguous') : t('latencyFailed'),
+  ]))
 
   return <>
     <PageHeader title={t('proxies')} />
@@ -240,6 +243,9 @@ export function ProxiesPage() {
               onToggle={() => setExpandedName(expandedName === group.name ? null : group.name)}
               onSelect={select}
               onTestDelay={testDelay}
+              onTestGroup={testGroup}
+              delayErrors={localizedDelayErrors}
+              testGroupLatencyLabel={t('testGroupLatency')}
               testLatencyLabel={t('testLatency')}
               selectedLabel={t('selected')}
             />)}
@@ -261,6 +267,9 @@ function ProxyGroupCard({
   onToggle,
   onSelect,
   onTestDelay,
+  onTestGroup,
+  delayErrors,
+  testGroupLatencyLabel,
   testLatencyLabel,
   selectedLabel,
 }: {
@@ -273,13 +282,17 @@ function ProxyGroupCard({
   canTestDelay: boolean
   onToggle: () => void
   onSelect: (group: string, proxy: string) => void
-  onTestDelay: (proxy: string) => void
+  onTestDelay: (proxy: ProxyOption) => void
+  onTestGroup: (group: ProxyGroup) => void
+  delayErrors: Record<string, string>
+  testGroupLatencyLabel: string
   testLatencyLabel: string
   selectedLabel: string
 }) {
   const options = group.options ?? []
   const selected = options.find((option) => option.name === group.selected)
-  const selectedDelay = latencyFor(selected, delays)
+  const selectedError = selected ? delayErrors[proxyKey(selected)] : undefined
+  const selectedDelay = selectedError ? undefined : latencyFor(selected, delays)
   const isBusy = busy !== ''
 
   return <article className={`proxy-group-card ${expanded ? 'expanded' : ''}`} style={{ order }}>
@@ -290,25 +303,25 @@ function ProxyGroupCard({
           <strong title={group.name}>{group.name}</strong>
           <small>{groupTypeLabel(group.type)} · {options.length}</small>
         </span>
-        <span className={`proxy-latency-pill ${latencyTone(selectedDelay, selected?.alive)}`}>
-          {selectedDelay === undefined ? '—' : `${selectedDelay} ms`}
+        <span className={`proxy-latency-pill ${toneFor(selected, delays, delayErrors)}`}>
+          {selectedError ?? (selectedDelay === undefined ? '—' : `${selectedDelay} ms`)}
         </span>
         {expanded ? <ChevronUp size={17} aria-hidden="true" /> : <ChevronDown size={17} aria-hidden="true" />}
       </button>
-      {canTestDelay && group.selected && <button
+      {canTestDelay && options.length > 0 && <button
         className="proxy-card-action"
         type="button"
         disabled={isBusy}
-        title={`${testLatencyLabel}: ${group.selected}`}
-        aria-label={`${testLatencyLabel}: ${group.selected}`}
-        onClick={() => onTestDelay(group.selected ?? '')}
+        title={`${testGroupLatencyLabel}: ${group.name}`}
+        aria-label={`${testGroupLatencyLabel}: ${group.name}`}
+        onClick={() => onTestGroup(group)}
       >
-        <Zap size={17} aria-hidden="true" className={busy === `delay:${group.selected}` ? 'spin-icon' : ''} />
+        <Zap size={17} aria-hidden="true" className={busy === `group:${group.name}` ? 'spin-icon' : ''} />
       </button>}
     </div>
 
     <div className="proxy-selected-summary">
-      <span className={`proxy-alive-dot ${latencyTone(selectedDelay, selected?.alive)}`} aria-hidden="true" />
+      <span className={`proxy-alive-dot ${toneFor(selected, delays, delayErrors)}`} aria-hidden="true" />
       <span className="proxy-selected-copy">
         <small>{selectedLabel}</small>
         <strong title={group.selected}>{group.selected ?? '—'}</strong>
@@ -317,15 +330,16 @@ function ProxyGroupCard({
     </div>
 
     {!expanded && options.length > 0 && <div className="proxy-health-rail" aria-hidden="true">
-      {options.slice(0, 32).map((option) => <span className={latencyTone(latencyFor(option, delays), option.alive)} key={option.name} />)}
+      {options.slice(0, 32).map((option) => <span className={toneFor(option, delays, delayErrors)} key={proxyKey(option)} />)}
       {options.length > 32 && <small>+{options.length - 32}</small>}
     </div>}
 
     {expanded && <div className="proxy-node-grid">
       {options.map((option) => {
-        const delay = latencyFor(option, delays)
+        const delayError = delayErrors[proxyKey(option)]
+        const delay = delayError ? undefined : latencyFor(option, delays)
         const selectedOption = option.name === group.selected
-        return <div className={`proxy-node ${selectedOption ? 'selected' : ''}`} key={option.name}>
+        return <div className={`proxy-node ${selectedOption ? 'selected' : ''}`} key={proxyKey(option)}>
           <button
             className="proxy-node-select"
             type="button"
@@ -337,8 +351,8 @@ function ProxyGroupCard({
             <strong>{option.name}</strong>
             <span className="proxy-node-meta">
               <small>{option.type ?? 'proxy'}</small>
-              <span className={`proxy-latency-pill ${latencyTone(delay, option.alive)}`}>
-                {delay === undefined ? <Gauge size={13} aria-hidden="true" /> : `${delay} ms`}
+              <span className={`proxy-latency-pill ${toneFor(option, delays, delayErrors)}`}>
+                {delayError ?? (delay === undefined ? <Gauge size={13} aria-hidden="true" /> : `${delay} ms`)}
               </span>
             </span>
           </button>
@@ -348,9 +362,9 @@ function ProxyGroupCard({
             disabled={isBusy}
             title={`${testLatencyLabel}: ${option.name}`}
             aria-label={`${testLatencyLabel}: ${option.name}`}
-            onClick={() => onTestDelay(option.name)}
+            onClick={() => onTestDelay(option)}
           >
-            <Zap size={13} aria-hidden="true" className={busy === `delay:${option.name}` ? 'spin-icon' : ''} />
+            <Zap size={13} aria-hidden="true" className={busy === `delay:${proxyKey(option)}` ? 'spin-icon' : ''} />
           </button>}
         </div>
       })}

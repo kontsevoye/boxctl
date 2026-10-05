@@ -25,6 +25,23 @@ describe('settings section availability', () => {
 })
 
 describe('settings update payload', () => {
+  it('omits an untouched TUN stack on unrelated saves but allows an explicit default override', () => {
+    const saved: Settings = {
+      language: 'en', theme: 'system', logLevel: 'info', updateChannel: 'stable',
+      captureMode: 'tun', startOnBoot: true, autoUpdate: false, tunStack: 'system',
+      maintenanceIntervalMinutes: 30,
+    }
+    const draft = reconcileSettingsDraft(undefined, saved)
+    const form = { ...saved, maintenanceIntervalMinutes: 60 }
+    expect(settingsUpdatePayload(form, draft.listText, draft.tunStackSelected)).not.toHaveProperty('tunStack')
+    expect(settingsUpdatePayload(form, draft.listText, draft.tunStackSelected).maintenanceIntervalMinutes).toBe(60)
+    // Selecting the displayed default is an intentional override even when
+    // the inherited profile stack is not represented by the API's default.
+    expect(settingsDraftDirty(saved, draft.listText, saved, true)).toBe(true)
+    expect(settingsUpdatePayload(saved, draft.listText, true).tunStack).toBe('system')
+    expect(settingsUpdatePayload({ ...saved, tunStack: 'mips' }, draft.listText, true).tunStack).toBe('mips')
+  })
+
 	it('keeps dashboard settings reachable when the engine supports integration', () => {
 		const capabilities: Capabilities = { coreName: 'mihomo', pages: { proxies: true }, actions: {} }
 		expect(externalDashboardSupported(capabilities)).toBe(false)
@@ -177,6 +194,18 @@ describe('settings draft refresh', () => {
     includedInterfaces: ['br-lan'], bypassTCPPorts: [22], maintenanceIntervalMinutes: 30,
     interfaces: [{ name: 'br-lan', role: 'lan' }], interfaceSource: 'ubus',
   }
+
+  it('retains an explicit default stack selection through polling and interface rescans', () => {
+    const current = reconcileSettingsDraft(undefined, { ...saved, tunStack: 'system' })
+    current.tunStackSelected = true
+    const incoming: Settings = { ...saved, tunStack: 'mips' }
+    const merged = reconcileSettingsDraft(current, incoming)
+    expect(merged.form.tunStack).toBe('system')
+    expect(merged.saved.tunStack).toBe('mips')
+    expect(merged.tunStackSelected).toBe(true)
+    expect(refreshSettingsInterfaces(merged, incoming).tunStackSelected).toBe(true)
+    expect(reconcileSettingsDraft(undefined, incoming).tunStackSelected).toBe(false)
+  })
 
   it('preserves edited values while accepting fresh values in untouched fields', () => {
     const current = reconcileSettingsDraft(undefined, saved)

@@ -279,6 +279,7 @@ export interface ProxySubscription {
 }
 
 export interface ProxyOption {
+  provider?: string
   name: string
   type?: string
   icon?: string
@@ -303,6 +304,7 @@ export interface ProxyGroup {
 }
 
 export interface ProxyDelayResult {
+  provider?: string
   proxy: string
   delayMs: number
 }

@@ -67,6 +67,46 @@ func TestSettingsServiceMipsRoundTripAndRestart(t *testing.T) {
 	}
 }
 
+func TestSettingsServiceUnrelatedSavePreservesInheritedTUNStack(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"tun", "mixed", "mixed2"} {
+		t.Run(mode, func(t *testing.T) {
+			service, err := NewSettingsService(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := service.State.SaveSettings(settingsRelativePath, state.Settings{"PROXY_MODE": mode, "FUTURE_KEY": "preserve"}); err != nil {
+				t.Fatal(err)
+			}
+			service.ValidateRuntimeSettings = func(context.Context, RuntimeSettings) error {
+				t.Fatal("unrelated save must not preflight the TUN stack")
+				return nil
+			}
+			var restarts []bool
+			service.OnChanged = func(_ context.Context, restart bool) error { restarts = append(restarts, restart); return nil }
+			interval := 60
+			// The panel omits tunStack until the user explicitly selects it.
+			if _, err := service.UpdateSettings(context.Background(), web.SettingsPatch{MaintenanceIntervalMinutes: &interval}); err != nil {
+				t.Fatal(err)
+			}
+			saved, err := LoadRuntimeSettings(service.State)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := saved.Raw["TUN_STACK"]; exists || saved.Raw["FUTURE_KEY"] != "preserve" || saved.MaintenanceInterval != interval {
+				t.Fatalf("unrelated save changed the stack override or lost settings: %+v", saved.Raw)
+			}
+			capture, err := saved.CapturePlan(ManagedMihomoSettings{TUNStack: "gvisor"})
+			if err != nil || capture.TUNStack != "gvisor" {
+				t.Fatalf("inherited capture = %+v, %v", capture, err)
+			}
+			if !reflect.DeepEqual(restarts, []bool{false}) {
+				t.Fatalf("unrelated save restart requirements = %v", restarts)
+			}
+		})
+	}
+}
+
 func TestSettingsServiceRejectsSingBoxMipsWithoutMutation(t *testing.T) {
 	t.Parallel()
 	service, err := NewSettingsService(t.TempDir())

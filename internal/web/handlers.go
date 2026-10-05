@@ -1332,6 +1332,7 @@ func (s *Server) handleCoreProxies(w http.ResponseWriter, r *http.Request, segme
 		}
 		var request struct {
 			Proxy     string `json:"proxy"`
+			Provider  string `json:"provider,omitempty"`
 			URL       string `json:"url"`
 			TimeoutMS int64  `json:"timeoutMs"`
 		}
@@ -1343,6 +1344,10 @@ func (s *Server) handleCoreProxies(w http.ResponseWriter, r *http.Request, segme
 			writeAPIError(w, r, http.StatusBadRequest, "invalid_proxy", "Proxy name is required and must be valid")
 			return
 		}
+		if request.Provider != "" && !validCoreIdentifier(request.Provider) {
+			writeAPIError(w, r, http.StatusBadRequest, "invalid_provider", "Provider name must be valid")
+			return
+		}
 		if !validDelayTestURL(request.URL) {
 			writeAPIError(w, r, http.StatusBadRequest, "invalid_test_url", "Test URL must be an absolute HTTP or HTTPS URL without credentials")
 			return
@@ -1351,7 +1356,7 @@ func (s *Server) handleCoreProxies(w http.ResponseWriter, r *http.Request, segme
 			writeAPIError(w, r, http.StatusBadRequest, "invalid_timeout", "Timeout must be between 1 and 60000 milliseconds")
 			return
 		}
-		result, err := s.services.Core.TestProxyDelay(r.Context(), request.Proxy, request.URL, time.Duration(request.TimeoutMS)*time.Millisecond)
+		result, err := s.services.Core.TestProxyDelay(r.Context(), request.Proxy, request.Provider, request.URL, time.Duration(request.TimeoutMS)*time.Millisecond)
 		if err != nil {
 			writeServiceError(w, r, err)
 			return

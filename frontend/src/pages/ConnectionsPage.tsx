@@ -149,7 +149,7 @@ export function ConnectionsPage() {
       </div>
       <div className="connections-result-count" role="status">{t('connectionResults').replace('{shown}', String(filtered.length)).replace('{total}', String(sourceConnections.length))}</div>
       {filtered.length === 0 && <Empty>{sourceConnections.length > 0 ? t('noSearchResults') : t('noData')}</Empty>}
-      {filtered.length > 0 && <VirtualConnectionTable key={`${tab}/${search}/${sourceFilter?.ip ?? ''}/${sortKey}/${descending}`} ids={filteredIDs} label={t('connections')} columnCount={showCloseColumn ? 10 : 9} detailIndex={expandedIndex} header={<tr aria-rowindex={1}>
+      {filtered.length > 0 && <VirtualConnectionTable resetKey={JSON.stringify([tab, search, sourceFilter?.ip, sortKey, descending])} ids={filteredIDs} label={t('connections')} columnCount={showCloseColumn ? 10 : 9} detailIndex={expandedIndex} header={<tr aria-rowindex={1}>
           <th className="connections-expand" />
           <SortableConnectionHeader label={t('host')} sortKey="host" activeKey={sortKey} descending={descending} onSort={changeSort} />
           <SortableConnectionHeader label={t('connectionType')} sortKey="type" activeKey={sortKey} descending={descending} onSort={changeSort} />

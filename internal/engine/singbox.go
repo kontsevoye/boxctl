@@ -898,12 +898,12 @@ func (d *SingBoxDriver) Select(ctx context.Context, group, proxy string) error {
 	return controller.Select(ctx, group, proxy)
 }
 
-func (d *SingBoxDriver) Delay(ctx context.Context, proxy, testURL string, timeout time.Duration) (time.Duration, error) {
+func (d *SingBoxDriver) Delay(ctx context.Context, proxy, provider, testURL string, timeout time.Duration) (time.Duration, error) {
 	controller, err := d.controller(CapabilityDelay)
 	if err != nil {
 		return 0, err
 	}
-	return controller.Delay(ctx, proxy, testURL, timeout)
+	return controller.Delay(ctx, proxy, provider, testURL, timeout)
 }
 
 func (d *SingBoxDriver) Providers(_ context.Context, kind ProviderKind) ([]Provider, error) {
