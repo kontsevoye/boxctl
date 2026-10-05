@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { Capabilities, Settings } from '../types'
-import { externalDashboardSupported, isCleanCoreInstall, parsePorts, settingsPortListErrors, settingsUpdatePayload, reconcileSettingsDraft, refreshSettingsInterfaces, settingsDraftDirty, settingsSectionFromSearch } from './SettingsPage'
+import { externalDashboardSupported, isCleanCoreInstall, parsePorts, settingsPortListErrors, settingsUpdatePayload, reconcileSettingsDraft, refreshSettingsInterfaces, settingsDraftDirty, settingsSectionFromSearch, tunStackOptions } from './SettingsPage'
+
+describe('TUN stack engine compatibility', () => {
+  it('offers mips for Mihomo, keeps the system default, and excludes it for sing-box', () => {
+    expect(tunStackOptions('mihomo').map((option) => option.value)).toEqual(['system', 'gvisor', 'mixed', 'mips'])
+    expect(tunStackOptions(undefined)[0]?.value).toBe('system')
+    expect(tunStackOptions('sing-box').map((option) => option.value)).toEqual(['system', 'gvisor', 'mixed'])
+    expect(tunStackOptions('sing-box', 'mips').find((option) => option.value === 'mips')).toMatchObject({ disabled: true })
+  })
+})
 
 describe('settings section availability', () => {
   it('keeps a reachable selected panel when backup capability is unavailable', () => {
@@ -68,6 +77,11 @@ describe('settings update payload', () => {
     }
 
     expect(settingsUpdatePayload(settings, lists).coreRestartGuard).toBe(false)
+    expect(settingsUpdatePayload(settings, lists).blockDoT).toBe(false)
+    settings.blockDoT = true
+    expect(settingsUpdatePayload(settings, lists).blockDoT).toBe(true)
+    settings.blockDoT = false
+    expect(settingsUpdatePayload(settings, lists).blockDoT).toBe(false)
     settings.coreRestartGuard = true
     expect(settingsUpdatePayload(settings, lists).coreRestartGuard).toBe(true)
     settings.coreRestartGuard = false

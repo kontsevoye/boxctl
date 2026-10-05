@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kontsevoye/boxctl/internal/platform/openwrt"
 	"github.com/kontsevoye/boxctl/internal/state"
@@ -26,6 +27,9 @@ type SettingsService struct {
 	SetStartOnBoot           func(context.Context, bool) error
 	DiscoverInterfaces       func(context.Context) (web.InterfaceCatalog, error)
 	SelectedEngine           func() string
+	// ValidateRuntimeSettings preflights a candidate under the lifecycle gate;
+	// it must not reacquire that gate, persist settings, or stop the live core.
+	ValidateRuntimeSettings func(context.Context, RuntimeSettings) error
 }
 
 func NewSettingsService(root string) (*SettingsService, error) {
@@ -90,6 +94,7 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 		raw["SINGBOX_TUN_MTU"] = strconv.FormatUint(uint64(*patch.TUNMTU), 10)
 	}
 	applyBoolPatch(raw, "BLOCK_QUIC", patch.RejectQUIC)
+	applyBoolPatch(raw, "BLOCK_DOT", patch.BlockDoT)
 	applyBoolPatch(raw, "AUTO_FAKEIP_WHITELIST", patch.AutoFakeIPWhitelist)
 	applyBoolPatch(raw, "AUTO_FAKEIP_INCLUDE_EXTERNAL_IP_PROVIDERS", patch.AutoFakeIPIncludeExternalIPProviders)
 	applyBoolPatch(raw, "USE_TMPFS_RULES", patch.UseTmpfsRules)
@@ -153,6 +158,33 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 	if err := validatePublicSettings(candidate.Raw); err != nil {
 		return web.Settings{}, err
 	}
+	selectedEngine := state.EngineMihomo
+	if service.SelectedEngine != nil {
+		selectedEngine = normalizedEngine(service.SelectedEngine())
+	}
+	if selectedEngine == state.EngineSingBox && candidate.TUNStack == "mips" {
+		return web.Settings{}, &web.PublicError{Status: http.StatusBadRequest, Code: "unsupported_tun_stack", Message: "TUN stack mips requires Mihomo; choose system, gvisor or mixed for sing-box"}
+	}
+	tunStackChanged := strings.TrimSpace(current.Raw["TUN_STACK"]) != strings.TrimSpace(candidate.Raw["TUN_STACK"])
+	enteringTUN := current.CaptureMode != candidate.CaptureMode &&
+		(candidate.CaptureMode == openwrt.ModeTUN || candidate.CaptureMode == openwrt.ModeMIXED || candidate.CaptureMode == openwrt.ModeMIXED2)
+	if selectedEngine == state.EngineMihomo && service.ValidateRuntimeSettings != nil && (tunStackChanged || enteringTUN) {
+		timeout := 30 * time.Second
+		if service.Lifecycle != nil && service.Lifecycle.PrepareTimeout > 0 {
+			timeout = service.Lifecycle.PrepareTimeout
+		}
+		preflightContext, cancel := context.WithTimeout(ctx, timeout)
+		err := service.ValidateRuntimeSettings(preflightContext, candidate)
+		cancel()
+		deferUntilInstalled := errors.Is(err, errMihomoSettingsPreflightUnavailable)
+		if deferUntilInstalled && service.Lifecycle != nil {
+			active := service.Lifecycle.Snapshot()
+			deferUntilInstalled = active.State != LifecycleRunning && !active.Health.Running
+		}
+		if err != nil && !deferUntilInstalled {
+			return web.Settings{}, &web.PublicError{Status: http.StatusBadRequest, Code: "runtime_settings_rejected", Message: "Settings were not saved: " + err.Error()}
+		}
+	}
 	if candidate.CoreRestartGuard && (candidate.OperatingMode != "gateway" || service.ConfigureRestartGuard == nil) {
 		return web.Settings{}, &web.PublicError{Status: http.StatusConflict, Code: "restart_guard_unavailable", Message: "Restart protection requires an owned OpenWrt gateway"}
 	}
@@ -180,15 +212,11 @@ func (service *SettingsService) UpdateSettings(ctx context.Context, patch web.Se
 		service.ExternalDashboardChanged()
 	}
 	unlock() // Callbacks may restart under the same lifecycle gate.
-	selectedEngine := state.EngineMihomo
-	if service.SelectedEngine != nil {
-		selectedEngine = normalizedEngine(service.SelectedEngine())
-	}
-	restartRequired := current.CaptureMode != candidate.CaptureMode || current.DNSMode != candidate.DNSMode || current.TUNStack != candidate.TUNStack ||
+	restartRequired := current.CaptureMode != candidate.CaptureMode || current.DNSMode != candidate.DNSMode || tunStackChanged || current.TUNStack != candidate.TUNStack ||
 		current.OperatingMode != candidate.OperatingMode ||
 		current.InterfaceMode != candidate.InterfaceMode || current.AutoDetectWAN != candidate.AutoDetectWAN || current.AutoDetectLAN != candidate.AutoDetectLAN ||
 		current.InterceptOutput != candidate.InterceptOutput || !slices.Equal(current.Included, candidate.Included) || !slices.Equal(current.Excluded, candidate.Excluded) ||
-		current.RejectQUIC != candidate.RejectQUIC || !slices.Equal(current.ReservedNetworks, candidate.ReservedNetworks) || !slices.Equal(current.BypassSources, candidate.BypassSources) ||
+		current.RejectQUIC != candidate.RejectQUIC || current.BlockDoT != candidate.BlockDoT || !slices.Equal(current.ReservedNetworks, candidate.ReservedNetworks) || !slices.Equal(current.BypassSources, candidate.BypassSources) ||
 		!slices.Equal(current.BypassTCPPorts, candidate.BypassTCPPorts) || !slices.Equal(current.BypassUDPPorts, candidate.BypassUDPPorts) ||
 		!slices.Equal(current.ProxyTCPPorts, candidate.ProxyTCPPorts) || !slices.Equal(current.ProxyUDPPorts, candidate.ProxyUDPPorts)
 	if selectedEngine == state.EngineSingBox {
@@ -242,6 +270,7 @@ func runtimeSettingsWeb(settings RuntimeSettings) web.Settings {
 		AutoDetectWAN: settings.AutoDetectWAN, AutoDetectLAN: settings.AutoDetectLAN, InterceptRouterOutput: settings.InterceptOutput,
 		IncludedInterfaces: append([]string(nil), settings.Included...), ExcludedInterfaces: append([]string(nil), settings.Excluded...),
 		TUNStack: settings.TUNStack, TUNAddress: settings.TUNAddress.String(), TUNMTU: settings.TUNMTU, RejectQUIC: settings.RejectQUIC,
+		BlockDoT:         settings.BlockDoT,
 		ReservedNetworks: append([]string(nil), settings.ReservedNetworks...), BypassSources: append([]string(nil), settings.BypassSources...),
 		BypassTCPPorts: append([]uint16(nil), settings.BypassTCPPorts...), BypassUDPPorts: append([]uint16(nil), settings.BypassUDPPorts...),
 		ProxyOnlyTCPPorts: append([]uint16(nil), settings.ProxyTCPPorts...), ProxyOnlyUDPPorts: append([]uint16(nil), settings.ProxyUDPPorts...),

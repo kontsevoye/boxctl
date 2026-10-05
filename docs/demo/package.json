@@ -9,6 +9,7 @@
   "scripts": {
     "setup:browser": "node scripts/browser.mjs",
     "capture": "node scripts/capture.mjs",
+    "capture:features": "node scripts/capture.mjs --features",
     "prepare:assets": "node scripts/prepare.mjs && python3 scripts/audio.py",
     "preview": "node scripts/hyperframes.mjs preview --port 3848",
     "lint": "node scripts/hyperframes.mjs lint",

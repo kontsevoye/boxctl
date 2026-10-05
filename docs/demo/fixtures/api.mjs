@@ -9,7 +9,7 @@ const mib = 1024 ** 2;
 const gib = 1024 ** 3;
 export const capabilities = {
   coreName: "mihomo",
-  coreVersion: "v1.19.30",
+  coreVersion: "v1.19.32",
   pages: enabled(
     "status profiles rawConfig proxySubscriptions settings backups proxies connections rules coreLogs systemLogs ruleLists",
   ),
@@ -40,7 +40,7 @@ export const engines = [
     selected: true,
     running: true,
     installSource: "managed",
-    version: "v1.19.30",
+    version: "v1.19.32",
     supportedCaptureModes: ["tproxy", "hybrid", "tun", "mixed", "mixed2"],
     management,
   },
@@ -135,7 +135,7 @@ export const status = {
   coreUptimeSeconds: 172904,
   core: {
     name: "mihomo",
-    version: "v1.19.30",
+    version: "v1.19.32",
     state: "running",
     since: "2026-09-06T11:58:16Z",
   },
@@ -176,6 +176,7 @@ export const settings = {
   tunAddress: "172.19.0.1/30",
   tunMTU: 1500,
   rejectQUIC: false,
+  blockDoT: false,
   reservedNetworks: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
   bypassSources: ["192.168.10.50"],
   bypassTCPPorts: [22],
@@ -473,7 +474,7 @@ export const logs = {
   ],
   system: [
     "boxctl manager started",
-    "Selected engine: mihomo · v1.19.30",
+    "Selected engine: mihomo · v1.19.32",
     "Active profile validated: Everyday network",
     "Capture plan applied: tproxy · br-lan, br-guest",
     "DNS mode configured: upstream",

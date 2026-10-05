@@ -244,6 +244,7 @@ type Settings struct {
 	TUNAddress                           string            `json:"tunAddress,omitempty"`
 	TUNMTU                               uint32            `json:"tunMTU,omitempty"`
 	RejectQUIC                           bool              `json:"rejectQUIC,omitempty"`
+	BlockDoT                             bool              `json:"blockDoT"`
 	ReservedNetworks                     []string          `json:"reservedNetworks,omitempty"`
 	BypassSources                        []string          `json:"bypassSources,omitempty"`
 	BypassTCPPorts                       []uint16          `json:"bypassTCPPorts,omitempty"`
@@ -294,6 +295,7 @@ type SettingsPatch struct {
 	TUNAddress                           *string   `json:"tunAddress,omitempty"`
 	TUNMTU                               *uint32   `json:"tunMTU,omitempty"`
 	RejectQUIC                           *bool     `json:"rejectQUIC,omitempty"`
+	BlockDoT                             *bool     `json:"blockDoT,omitempty"`
 	ReservedNetworks                     *[]string `json:"reservedNetworks,omitempty"`
 	BypassSources                        *[]string `json:"bypassSources,omitempty"`
 	BypassTCPPorts                       *[]uint16 `json:"bypassTCPPorts,omitempty"`

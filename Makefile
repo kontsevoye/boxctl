@@ -28,6 +28,7 @@ POSIX_SHELL_SCRIPTS := \
 	tests/integration/guest/parity-mihomo.sh \
 	tests/integration/guest/parity-singbox.sh \
 	tests/integration/guest/singbox-traffic.sh \
+	tests/integration/guest/network-features.sh \
 	tests/integration/guest/traffic.sh
 BASH_SHELL_SCRIPTS := \
 	scripts/build-openwrt-apk.sh \

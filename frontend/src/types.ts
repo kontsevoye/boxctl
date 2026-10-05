@@ -128,10 +128,11 @@ export interface Settings {
   autoDetectWAN?: boolean
   autoDetectLAN?: boolean
   interceptRouterOutput?: boolean
-  tunStack?: string
+  tunStack?: 'system' | 'gvisor' | 'mixed' | 'mips'
   tunAddress?: string
   tunMTU?: number
   rejectQUIC?: boolean
+  blockDoT?: boolean
   reservedNetworks?: string[]
   bypassSources?: string[]
   bypassTCPPorts?: number[]

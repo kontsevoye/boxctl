@@ -24,6 +24,12 @@ The first setup needs internet for packages and Chrome. No router, account,
 API key, hosted renderer, or music service is needed to build the film.
 The capture process starts its own loopback Vite frontend and fixture API,
 exercises the actual React pages, captures them at 2× resolution, and shuts down.
+
+`npm --prefix docs/demo run capture:features` also checks DoT/TUN settings save,
+reload, validation and engine-specific choices, plus Connections with 5000
+synthetic rows on desktop/mobile. It verifies bounded DOM rendering, offscreen
+search, live scroll anchoring and closing the intended connection. API saves
+are simulated here; the separate OpenWrt VM suite tests actual network traffic.
 It rejects browser errors, missing expected UI, horizontal overflow, external
 requests, and API calls without explicit fixtures. It does not edit the app.
 

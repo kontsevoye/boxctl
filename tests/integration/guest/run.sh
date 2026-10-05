@@ -53,7 +53,7 @@ mkdir -p /tmp/resolv.conf.d
 printf 'nameserver 192.168.113.3\n' >/tmp/resolv.conf.d/resolv.conf.auto
 {
 	apk update
-	apk add ip-full kmod-tun kmod-inet-diag kmod-nft-tproxy nftables-json curl ca-bundle kmod-veth iperf3 jq
+	apk add ip-full kmod-tun kmod-inet-diag kmod-nft-tproxy nftables-json curl ca-bundle kmod-veth iperf3 jq socat
 } >"${output}/apk.log" 2>&1 || die 'package installation failed'
 
 note 'isolating the package network'
@@ -581,6 +581,24 @@ core_pid=$(exact_pid "$mihomo_binary")
 
 note 'running captured and direct traffic flows'
 "$input/guest/traffic.sh" "$output" "$manager_pid" "$core_pid" || die 'traffic test failed'
+
+note 'checking LAN DoT enforcement with actual TCP/UDP traffic'
+"$input/guest/network-features.sh" "$output/network-features" "$cookie_jar" "$csrf_token" || die 'DoT traffic test failed'
+wait_managed_engine mihomo "$mihomo_binary" "$mihomo_profile" || die 'Mihomo did not recover after DoT tests'
+
+note 'checking Mihomo mips TUN with actual captured and direct traffic'
+curl --fail --silent --show-error --max-time 90 --cookie "$cookie_jar" \
+	-H 'Content-Type: application/json' -H "X-CSRF-Token: $csrf_token" -X PUT \
+	--data '{"captureMode":"tun","tunStack":"mips"}' "$api/settings" >"$output/mips-save.json"
+core_pid=$(exact_pid "$mihomo_binary")
+mips_runtime=$(jq -er '.prepared.runtimeConfigPath' "$process_state")
+grep -Eq '^[[:space:]]+stack:[[:space:]]+"?mips"?' "$mips_runtime" || die 'mips was not applied to the runtime configuration'
+mkdir -p "$output/mips-traffic"
+BOXCTL_TRAFFIC_CAPTURE_TYPE=Tun "$input/guest/traffic.sh" "$output/mips-traffic" "$manager_pid" "$core_pid" || die 'mips TUN traffic test failed'
+curl --fail --silent --show-error --max-time 90 --cookie "$cookie_jar" \
+	-H 'Content-Type: application/json' -H "X-CSRF-Token: $csrf_token" -X PUT \
+	--data '{"captureMode":"tproxy","tunStack":"system"}' "$api/settings" >"$output/mips-restore.json"
+wait_managed_engine mihomo "$mihomo_binary" "$mihomo_profile" || die 'Mihomo did not recover after mips tests'
 
 note 'switching live from Mihomo to sing-box'
 if ! activate_profile "$sing_profile" sing-box; then
