@@ -444,6 +444,9 @@ IFS= read -r isolation || die 'isolation acknowledgement missing'
 note 'configuring synthetic OpenWrt topology'
 uci -q delete network.lan || true
 uci -q delete network.wan || true
+# A late SLAAC/DHCPv6 default-interface update makes sing-box close live flows.
+# The parity topology is IPv4-only, so remove the image's inherited WAN6 client.
+uci -q delete network.wan6 || true
 uci -q delete network.br_lan || true
 if [ "$(uci -q get 'network.@device[0].name')" = br-lan ]; then uci -q delete 'network.@device[0]'; fi
 uci set network.br_lan=device
